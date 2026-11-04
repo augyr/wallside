@@ -8,7 +8,7 @@ const STROKE_WORDS = [
 const VALID_DISTANCES = new Set([25, 50, 100, 200, 400, 500, 800, 1000, 1500, 1650]);
 const STATUS_WORDS = new Set(['DQ', 'NS', 'DFS', 'SCR', 'DNF', 'NSS', 'DNS']);
 
-const EVENT_RE = /^\(?\s*(?:#\s*(\d+)|Event\s+(\d+))\s+(.*?)\b(\d{2,4})\s+(LC\s+Meters?|SC\s+Meters?|Yards?|Meters?|Metres?)\s+(.+?)\)?\s*$/i;
+const EVENT_RE = /^\(?\s*(?:#\s*(\d+)\s+|Event\s+(\d+)\s+|(?=(?:Girls|Boys|Women|Men|Mixed|Open|Female|Male)\b))(.*?)\b(\d{2,4})\s+(LC\s+Meters?|SC\s+Meters?|Yards?|Meters?|Metres?)\s+(.+?)\)?\s*$/i;
 const MEET_RE = /^(.*?\S)\s+-\s+(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+to\s+\d{1,2}\/\d{1,2}\/\d{4})?\s*$/;
 
 function isTimeToken(tok) {
@@ -24,13 +24,13 @@ export function parseEventLine(line) {
   const rest = m[6];
   // An event title never contains a comma (names do) or a race time
   if (rest.includes(',') || /\d\.\d\d/.test(rest)) return null;
-  if (/relay/i.test(rest) || /diving/i.test(line)) return { skip: true, number: Number(m[1] || m[2]) };
+  if (/relay/i.test(rest) || /diving/i.test(line)) return { skip: true, number: Number(m[1] || m[2]) || null };
   const distance = Number(m[4]);
   const strokeEntry = STROKE_WORDS.find(([re]) => re.test(rest.trim()));
-  if (!strokeEntry || !VALID_DISTANCES.has(distance)) return { skip: true, number: Number(m[1] || m[2]) };
+  if (!strokeEntry || !VALID_DISTANCES.has(distance)) return { skip: true, number: Number(m[1] || m[2]) || null };
   const unit = m[5].toLowerCase();
   const course = unit.startsWith('yard') ? 'SCY' : unit.startsWith('lc') ? 'LCM' : unit.startsWith('sc') ? 'SCM' : 'M';
-  return { number: Number(m[1] || m[2]), label: line.trim().replace(/^\(|\)$/g, ''), distance, stroke: strokeEntry[1], course };
+  return { number: Number(m[1] || m[2]) || null, label: line.trim().replace(/^\(|\)$/g, ''), distance, stroke: strokeEntry[1], course };
 }
 
 // "  1 Rivera, Maya R   15 PASA-PC   1:00.50   59.84" → swim fields (or null)
