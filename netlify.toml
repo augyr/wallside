@@ -1,0 +1,12 @@
+# Netlify settings for Wallside.
+# The app is plain files in web/ — no build step.
+[build]
+  publish = "web"
+  command = ""
+
+# Keep the site out of search engines while it's being tested.
+# Remove this block when you're ready for Wallside to be found on Google.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Robots-Tag = "noindex, nofollow"
