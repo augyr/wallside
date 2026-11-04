@@ -147,6 +147,11 @@ async function renderReview(parsed, fileName) {
   const rosterById = Object.fromEntries(roster.map((s) => [s.id, s]));
 
   // Decisions the coach makes, by person
+  // Team swimmers with no one on the roster sharing their last name (e.g. other PASA groups at the
+  // same meet) are left out by default, in their own collapsed list, instead of needing a decision each.
+  groups.notOnRoster = groups.needsMatch.filter((p) => p.reason === 'Not on your roster');
+  groups.needsMatch = groups.needsMatch.filter((p) => p.reason !== 'Not on your roster');
+  for (const p of groups.notOnRoster) { p.choice = 'skip'; p.rememberName = false; }
   for (const p of [...groups.needsMatch, ...groups.unattached]) {
     // Pre-select only a likely nickname match (e.g. Theodore → Teddy); never a wrong-age or
     // last-name-only guess, and unattached swimmers start out left out.
@@ -154,7 +159,7 @@ async function renderReview(parsed, fileName) {
     p.rememberName = true;
     p.markUnattached = true;
   }
-  for (const p of [...groups.matched, ...groups.needsMatch, ...groups.unattached]) {
+  for (const p of [...groups.matched, ...groups.needsMatch, ...groups.unattached, ...groups.notOnRoster]) {
     for (const s of p.swims) { s.include = true; s.editTime = s.timeCs; }
   }
 
@@ -163,8 +168,9 @@ async function renderReview(parsed, fileName) {
     h('h1', {}, 'Review results'),
     meetCard(meet, fileCourse, parsed, counts, team, draw),
     groups.needsMatch.length ? decisionSection('Needs a match', groups.needsMatch, roster, rosterById, false, draw) : null,
-    flaggedSection([...groups.matched, ...groups.needsMatch.filter((p) => p.choice && p.choice !== 'skip')], rosterById),
+    flaggedSection([...groups.matched, ...[...groups.needsMatch, ...groups.notOnRoster].filter((p) => p.choice && p.choice !== 'skip')], rosterById),
     groups.unattached.length ? decisionSection('Unattached swimmers', groups.unattached, roster, rosterById, true, draw) : null,
+    groups.notOnRoster.length ? notOnRosterSection(groups.notOnRoster, roster, rosterById, draw) : null,
     matchedSection(groups.matched, rosterById, meet),
     publishCard(meet, groups, rosterById, parsed)));
   draw();
@@ -238,6 +244,16 @@ function decisionSection(title, people, roster, rosterById, unattached, redraw) 
         h('p', { class: 'muted small' }, p.swims.map(swimLabel).join(' · ')),
         sel, remember, markUn);
     })));
+}
+
+function notOnRosterSection(people, roster, rosterById, redraw) {
+  const included = people.filter((p) => p.choice && p.choice !== 'skip').length;
+  const list = decisionSection('Not on your roster', people, roster, rosterById, false, redraw);
+  return h('details', { class: 'card', open: included ? true : null },
+    h('summary', {}, `${people.length} more ${people.length === 1 ? 'swimmer' : 'swimmers'} from your team not on your roster — left out`
+      + (included ? ` (${included} added)` : '')),
+    h('p', { class: 'muted small' }, 'Usually swimmers from other groups at the same meet. Open a name only if they belong on your roster.'),
+    list);
 }
 
 function swimRow(p, s, rosterById, showName) {
@@ -317,7 +333,7 @@ function publishCard(meet, groups, rosterById, parsed) {
 
       // New swimmers first
       const resolved = [];
-      const toCreate = [...groups.needsMatch, ...groups.unattached].filter((p) => p.choice === 'new');
+      const toCreate = [...groups.needsMatch, ...groups.unattached, ...groups.notOnRoster].filter((p) => p.choice === 'new');
       if (toCreate.length) {
         const created = must(await db.from('swimmers').insert(toCreate.map((p) => ({
           team_id: team.id, first_name: p.first, last_name: p.last,
@@ -327,7 +343,7 @@ function publishCard(meet, groups, rosterById, parsed) {
         toCreate.forEach((p, i) => { p.finalId = created[i].id; });
       }
       for (const p of groups.matched) { p.finalId = p.swimmerId; resolved.push(p); }
-      for (const p of [...groups.needsMatch, ...groups.unattached]) {
+      for (const p of [...groups.needsMatch, ...groups.unattached, ...groups.notOnRoster]) {
         if (p.choice && p.choice !== 'skip' && p.choice !== 'new') p.finalId = p.choice;
         if (p.finalId) resolved.push(p);
       }
