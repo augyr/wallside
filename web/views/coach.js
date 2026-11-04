@@ -61,7 +61,7 @@ export function renderCoachSetup() {
 async function loadTeam(teamId) {
   const [groups, swimmers, guardians, invites] = await Promise.all([
     db.from('groups').select('id, name, sort').eq('team_id', teamId).order('sort'),
-    db.from('swimmers').select('id, first_name, last_name, birth_year, group_id, archived').eq('team_id', teamId).eq('archived', false).order('last_name'),
+    db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, group_id, archived').eq('team_id', teamId).eq('archived', false).order('last_name'),
     db.from('guardians').select('swimmer_id, user_id'),
     db.from('invites').select('code, swimmer_id, uses_left, expires_at').eq('kind', 'guardian').eq('revoked', false),
   ]);
@@ -74,12 +74,49 @@ async function loadTeam(teamId) {
   return { groups: must(groups) || [], swimmers: swimmerList, joined, codes };
 }
 
-export async function renderCoach(tab = 'roster') {
+export function coachTeam() {
   const membership = state.coachTeams[0];
-  const teamId = membership.team_id;
-  const teamName = membership.teams ? membership.teams.name : 'Your team';
+  const t = membership.teams || {};
+  return { id: membership.team_id, name: t.name || 'Your team', code: t.team_code || null,
+    aliases: t.team_aliases || [], role: membership.role };
+}
 
-  mount(topBar('coach'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading team…')));
+export function coachChrome(tab, subtitle) {
+  const team = coachTeam();
+  const link = (href, key, label) => h('a', { href, 'aria-current': tab === key ? 'page' : null }, label);
+  return [
+    ...topBar('coach'),
+    h('header', { class: 'team-head' },
+      h('p', { class: 'eyebrow' }, 'Coach' + (team.code ? ' · ' + team.code : '')),
+      h('h1', {}, team.name),
+      subtitle ? h('p', {}, subtitle) : null),
+    h('nav', { class: 'tabs', 'aria-label': 'Coach sections' },
+      link('#/coach', 'roster', 'Roster'),
+      link('#/coach/results', 'results', 'Results'),
+      link('#/coach/invites', 'invites', 'Invites'),
+      link('#/coach/team', 'team', 'Team')),
+  ];
+}
+
+export async function renderCoach(section = 'roster', id, sub, key) {
+  const views = await import('./coach-extra.js');
+  switch (section) {
+    case 's':
+      if (sub === 'edit') return views.renderSwimmerEdit(id);
+      if (sub === 'e') return (await import('./analytics.js')).renderEvent(id, key, 'coach');
+      return (await import('./swimmer.js')).renderSwimmerPage(id, 'coach');
+    case 'results':
+      return id ? (await import('./results.js')).renderMeet(id) : (await import('./results.js')).renderResults();
+    case 'upload': return (await import('./results.js')).renderUpload();
+    case 'team': return views.renderTeamSettings();
+    case 'birthyears': return views.renderBirthYears();
+    default: return renderRosterOrInvites(section === 'invites' ? 'invites' : 'roster');
+  }
+}
+
+async function renderRosterOrInvites(tab) {
+  const teamId = coachTeam().id;
+  mount(coachChrome(tab), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading team…')));
   let data;
   try {
     data = await loadTeam(teamId);
@@ -87,19 +124,9 @@ export async function renderCoach(tab = 'roster') {
     toast(err.message || String(err), 'error');
     return;
   }
-
-  const tabs = h('nav', { class: 'tabs', 'aria-label': 'Coach sections' },
-    h('a', { href: '#/coach', 'aria-current': tab !== 'invites' ? 'page' : null }, 'Roster'),
-    h('a', { href: '#/coach/invites', 'aria-current': tab === 'invites' ? 'page' : null }, 'Invites'));
-
   const joinedCount = data.swimmers.filter((s) => data.joined[s.id]).length;
-
-  mount(topBar('coach'),
-    h('header', { class: 'team-head' },
-      h('p', { class: 'eyebrow' }, 'Coach'),
-      h('h1', {}, teamName),
-      h('p', {}, `${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'} · ${joinedCount} ${joinedCount === 1 ? 'family' : 'families'} joined`)),
-    tabs,
+  mount(coachChrome(tab,
+      `${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'} · ${joinedCount} ${joinedCount === 1 ? 'family' : 'families'} joined`),
     h('main', { class: 'page' }, tab === 'invites' ? invitesView(teamId, data) : rosterView(teamId, data)));
 }
 
@@ -112,10 +139,13 @@ function rosterView(teamId, data) {
   const sections = data.groups.map((g) => groupSection(g.name, byGroup.get(g.id), data));
   if (ungrouped.length) sections.push(groupSection('No group', ungrouped, data));
 
+  const missingYears = data.swimmers.filter((s) => !s.birth_year || s.birth_year_estimated).length;
   return [
     data.swimmers.length ? null : h('section', { class: 'card empty' },
       h('h3', {}, 'Add your swimmers'),
       h('p', { class: 'muted' }, 'Add swimmers one at a time, or paste a list from your team spreadsheet below. You can add notes and times before families join — it will all be waiting for them.')),
+    data.swimmers.length && missingYears ? h('a', { href: '#/coach/birthyears', class: 'notice-link' },
+      `${missingYears} swimmer${missingYears === 1 ? ' needs a' : 's need a'} birth year checked →`) : null,
     ...sections,
     addSwimmerCard(teamId, data.groups),
     pasteListCard(teamId, data.groups, groupName),
@@ -127,14 +157,16 @@ function groupSection(name, swimmers, data) {
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', {}, name), h('span', { class: 'muted' }, `${swimmers.length}`)),
     swimmers.length
-      ? h('ul', { class: 'list' }, swimmers.map((s) => h('li', { class: 'list-row' },
-          h('span', { class: 'avatar' }, initials(s.first_name, s.last_name)),
-          h('span', { class: 'grow' },
-            h('strong', {}, `${s.first_name} ${s.last_name}`),
-            h('span', { class: 'muted small block' }, s.birth_year ? `Born ${s.birth_year}` : 'Birth year not set')),
-          data.joined[s.id]
-            ? h('span', { class: 'pill ok' }, `${data.joined[s.id]} joined`)
-            : h('span', { class: 'pill' }, 'Not joined'))))
+      ? h('ul', { class: 'list' }, swimmers.map((s) => h('li', {},
+          h('a', { class: 'list-row row-link', href: `#/coach/s/${s.id}` },
+            h('span', { class: 'avatar' }, initials(s.first_name, s.last_name)),
+            h('span', { class: 'grow' },
+              h('strong', {}, `${s.first_name} ${s.last_name}`),
+              h('span', { class: 'muted small block' },
+                s.birth_year ? `Born ${s.birth_year}${s.birth_year_estimated ? ' (estimated)' : ''}` : 'Birth year not set')),
+            data.joined[s.id]
+              ? h('span', { class: 'pill ok' }, `${data.joined[s.id]} joined`)
+              : h('span', { class: 'pill' }, 'Not joined')))))
       : h('p', { class: 'muted' }, 'No swimmers in this group yet.'));
 }
 

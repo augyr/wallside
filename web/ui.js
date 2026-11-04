@@ -80,21 +80,17 @@ export function initials(first, last) {
   return ((first || '?').charAt(0) + (last || '').charAt(0)).toUpperCase();
 }
 
-// 5984 hundredths → "59.84"; 6788 → "1:07.88"
-export function formatTime(cs) {
-  if (!cs && cs !== 0) return '--.--';
-  const totalSeconds = Math.floor(cs / 100);
-  const hundredths = String(cs % 100).padStart(2, '0');
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return minutes > 0
-    ? `${minutes}:${String(seconds).padStart(2, '0')}.${hundredths}`
-    : `${seconds}.${hundredths}`;
+export { formatTime, formatDiff, parseTime, eventName } from './lib/time.js';
+
+export function formatDate(isoDate) {
+  if (!isoDate) return '';
+  return new Date(String(isoDate).slice(0, 10) + 'T12:00:00')
+    .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-const STROKES = { FR: 'Free', BK: 'Back', BR: 'Breast', FL: 'Fly', IM: 'IM' };
-export function eventName(distance, stroke) {
-  return `${distance} ${STROKES[stroke] || stroke}`;
+// Back link at the top of a sub-page
+export function backLink(href, label) {
+  return h('a', { href, class: 'back' }, '← ' + label);
 }
 
 export function timeAgo(iso) {

@@ -29,7 +29,10 @@ export function renderLogin() {
     h('section', { class: 'card' },
       pending ? h('p', { class: 'notice' }, `Invite code ${pending} saved. Sign in to continue.`) : null,
       h('p', { class: 'muted' }, 'No password needed. We\'ll email you a link and a 6-digit code.'),
-      form)));
+      form),
+    h('a', { href: '#/demo', class: 'choice' },
+      h('strong', {}, 'Try the demo'),
+      h('span', { class: 'muted' }, 'Look around with a made-up PASA team — no sign-in.'))));
 }
 
 function renderCheckEmail(address) {
