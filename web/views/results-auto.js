@@ -3,7 +3,7 @@
 import { db, state } from '../app.js';
 import { must } from '../ui.js';
 import { parseResultLines, linesFromPdfPages, linesFromText } from '../lib/results-parser.js';
-import { buildReview, isOurTeam } from '../lib/matcher.js';
+import { buildReview, isOurTeam, autoSkipped } from '../lib/matcher.js';
 import { seedWorthKeeping } from '../lib/bests.js';
 
 const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
@@ -139,7 +139,7 @@ export function autoReview(parsed, roster, bests, team) {
     }
   }
   const seeds = seedsFor(groups.matched, bests[course] || {}).map(({ swimmer_id, distance, stroke, time_cs }) => ({ swimmer_id, distance, stroke, time_cs }));
-  const held = groups.needsMatch.filter((p) => p.reason !== 'Not on your roster');
+  const held = groups.needsMatch.filter((p) => !autoSkipped(p));
   const ours = parsed.swims.filter((s) => isOurTeam(s.team, team.code, team.aliases || [])).length;
   return {
     meet: { name: parsed.meet.name || 'Meet results', meet_date: parsed.meet.date || null, course },

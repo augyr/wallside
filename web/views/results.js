@@ -3,7 +3,7 @@ import { db, state } from '../app.js';
 import { h, mount, must, toast, busy, field, backLink, formatTime, parseTime, eventName, formatDate } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { teamCodeCard } from './coach-extra.js';
-import { buildReview, estimateBirthYear } from '../lib/matcher.js';
+import { buildReview, estimateBirthYear, autoSkipped } from '../lib/matcher.js';
 import { COURSE_LABEL } from '../lib/time.js';
 import { readResults, readResultsFromUrl, loadRosterAndBests, seedsFor, approveInboxItem, dismissInboxItem } from './results-auto.js';
 
@@ -117,8 +117,8 @@ export async function renderReview(parsed, fileName, opts = {}) {
   // Decisions the coach makes, by person
   // Team swimmers with no one on the roster sharing their last name (e.g. other PASA groups at the
   // same meet) are left out by default, in their own collapsed list, instead of needing a decision each.
-  groups.notOnRoster = groups.needsMatch.filter((p) => p.reason === 'Not on your roster');
-  groups.needsMatch = groups.needsMatch.filter((p) => p.reason !== 'Not on your roster');
+  groups.notOnRoster = groups.needsMatch.filter(autoSkipped);
+  groups.needsMatch = groups.needsMatch.filter((p) => !autoSkipped(p));
   for (const p of groups.notOnRoster) { p.choice = 'skip'; p.rememberName = false; }
   for (const p of [...groups.needsMatch, ...groups.unattached]) {
     // Pre-select only a likely nickname match (e.g. Theodore → Teddy); never a wrong-age or
@@ -255,11 +255,11 @@ function decisionSection(title, people, roster, rosterById, unattached, redraw) 
 
 function notOnRosterSection(people, roster, rosterById, redraw) {
   const included = people.filter((p) => p.choice && p.choice !== 'skip').length;
-  const list = decisionSection('Not on your roster', people, roster, rosterById, false, redraw);
+  const list = decisionSection('Left out', people, roster, rosterById, false, redraw);
   return h('details', { class: 'card', open: included ? true : null },
-    h('summary', {}, `${people.length} more ${people.length === 1 ? 'swimmer' : 'swimmers'} from your team not on your roster — left out`
+    h('summary', {}, `${people.length} more ${people.length === 1 ? 'swimmer' : 'swimmers'} from your team left out — not on your roster`
       + (included ? ` (${included} added)` : '')),
-    h('p', { class: 'muted small' }, 'Usually swimmers from other groups at the same meet. Open a name only if they belong on your roster.'),
+    h('p', { class: 'muted small' }, 'Swimmers from other groups, and anyone who only shares a last name with one of your swimmers. Nicknames still ask you. Open a name only if they belong on your roster.'),
     list);
 }
 

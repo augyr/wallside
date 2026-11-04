@@ -220,3 +220,17 @@ test('best times include faster seeds, labeled', async () => {
   assert.equal(seedWorthKeeping({ seedCs: 2600, timeCs: 2500, status: 'ok' }), false);
   assert.equal(seedWorthKeeping({ seedCs: 2400, seedConverted: true, timeCs: 2500, status: 'ok' }), false);
 });
+
+test('same last name, different first name is skipped automatically; nicknames are not', async () => {
+  const { autoSkipped } = await import('../web/lib/matcher.js');
+  const roster = [{ id: 'a', first_name: 'Nora', last_name: 'Bennett', birth_year: 2010 }, { id: 'b', first_name: 'Theodore', last_name: 'Vale', birth_year: 2010 }];
+  const swims = [
+    { name: 'Bennett, Chloe', age: 12, team: 'PASA-PC', status: 'ok', timeCs: 3000, distance: 50, stroke: 'FR' },
+    { name: 'Vale, Teddy', age: 16, team: 'PASA-PC', status: 'ok', timeCs: 3000, distance: 50, stroke: 'FR' },
+  ];
+  const { groups } = buildReview(swims, roster, { teamCode: 'PASA', meetDate: '2026-11-01', bests: {} });
+  const chloe = groups.needsMatch.find((p) => p.name === 'Bennett, Chloe');
+  const teddy = groups.needsMatch.find((p) => p.name === 'Vale, Teddy');
+  assert.equal(autoSkipped(chloe), true);
+  assert.equal(autoSkipped(teddy), false);
+});

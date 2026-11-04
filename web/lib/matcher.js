@@ -77,6 +77,11 @@ export function isOurTeam(team, teamCode, aliases = []) {
   return aliases.some((a) => a && (compact(a) === t || teamCodeOf(a) === code));
 }
 
+// Names that are left out automatically: not on the roster at all, or same last name but a
+// clearly different first name (not a nickname). They can still be added from the "left out" list.
+export const AUTO_SKIP_REASONS = new Set(['Not on your roster', 'Same last name as someone on your roster, but a different first name']);
+export const autoSkipped = (p) => AUTO_SKIP_REASONS.has(p.reason);
+
 // Groups swims into what the coach reviews.
 // swims: from parseResultLines; roster: swimmers; opts: { teamCode, aliases, meetDate, bests: {swimmerId: {eventKey: cs}} }
 export function buildReview(swims, roster, opts) {
