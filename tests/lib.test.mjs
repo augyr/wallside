@@ -2,7 +2,7 @@
 // Run with:  node tests/lib.test.mjs      (all names here are made up)
 import assert from 'node:assert/strict';
 import { parseTime, formatTime } from '../web/lib/time.js';
-import { parseResultLines, linesFromText, linesFromPdfPages, parseSwimLine, lapSplits } from '../web/lib/results-parser.js';
+import { parseResultLines, linesFromText, linesFromPdfPages, parseSwimLine, parseEventLine, lapSplits } from '../web/lib/results-parser.js';
 import { buildReview, splitResultName, teamCodeOf, agesFor } from '../web/lib/matcher.js';
 import { goalSplits, diveRange, halves } from '../web/lib/goalsplits.js';
 import { analyticsLevel } from '../web/lib/levels.js';
@@ -81,7 +81,7 @@ test('web results: meet, events, statuses, splits, relays skipped', () => {
 test('PDF style lines: place, ties, DQ with time', () => {
   assert.deepEqual(
     { ...parseSwimLine('*13 Lark, Juniper T            8 PASA-PC         25.71') },
-    { place: 13, name: 'Lark, Juniper T', age: 8, team: 'PASA-PC', status: 'ok', timeCs: 2571 });
+    { place: 13, name: 'Lark, Juniper T', age: 8, team: 'PASA-PC', status: 'ok', timeCs: 2571, seedCs: null, seedConverted: false });
   const dq = parseSwimLine('--- Pemberton, Ada            7 PASA-PC     DQ 37.95');
   assert.equal(dq.status, 'dq');
   assert.equal(dq.timeCs, 3795);
@@ -193,3 +193,30 @@ test('analytics level: coach override, then group, then age', () => {
 });
 
 console.log(`\n${passed} tests passed`);
+
+test('seed times: kept, converted, NT', () => {
+  const a = parseSwimLine('  1 Testa, Sally            17 PASA-PC                23.73      24.28');
+  assert.equal(a.seedCs, 2373); assert.equal(a.timeCs, 2428);
+  assert.equal(parseSwimLine('  2 Yeo, Abby Z    15 SCSC-PC   24.13L     24.85').seedConverted, true);
+  assert.equal(parseSwimLine('  3 Roe, Jo        15 PASA-PC      NT      25.85').seedCs, null);
+  assert.equal(parseSwimLine(' -- Doe, Jim       14 PASA-PC   1:05.00   DQ').seedCs, 6500);
+});
+
+test('event titles without numbers', () => {
+  assert.equal(parseEventLine('Girls 50 Yard Freestyle').distance, 50);
+  assert.equal(parseEventLine('Boys 13-14 100 Yard Backstroke').stroke, 'BK');
+  assert.equal(parseEventLine('Women 200 Yard Freestyle Relay').skip, true);
+  assert.equal(parseEventLine('Bennett, Girls 50 Yard Free 23.12'), null);
+});
+
+test('best times include faster seeds, labeled', async () => {
+  const { bestTimes, seedWorthKeeping } = await import('../web/lib/bests.js');
+  const b = bestTimes([{ distance: 100, stroke: 'FR', course: 'SCY', time_cs: 5400, status: 'ok', meet_name: 'A' }],
+    [{ distance: 100, stroke: 'FR', course: 'SCY', time_cs: 5300, meets: { name: 'B' } }, { distance: 50, stroke: 'FR', course: 'SCY', time_cs: 2500 }]);
+  assert.equal(b.SCY['100-FR'].fromSeed, true); assert.equal(b.SCY['100-FR'].time_cs, 5300);
+  const tie = bestTimes([{ distance: 50, stroke: 'FR', course: 'SCY', time_cs: 2500, status: 'ok' }], [{ distance: 50, stroke: 'FR', course: 'SCY', time_cs: 2500 }]);
+  assert.equal(tie.SCY['50-FR'].fromSeed, false);
+  assert.equal(seedWorthKeeping({ seedCs: 2400, timeCs: 2500, status: 'ok' }), true);
+  assert.equal(seedWorthKeeping({ seedCs: 2600, timeCs: 2500, status: 'ok' }), false);
+  assert.equal(seedWorthKeeping({ seedCs: 2400, seedConverted: true, timeCs: 2500, status: 'ok' }), false);
+});

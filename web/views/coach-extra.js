@@ -1,6 +1,6 @@
 // Coach screens: edit a swimmer, team settings (team code, groups), bulk birth years.
 import { db, loadRoles } from '../app.js';
-import { h, mount, must, toast, busy, field, backLink } from '../ui.js';
+import { h, mount, must, toast, busy, field, backLink, timeAgo } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { LEVELS, LEVEL_LABEL, analyticsLevel } from '../lib/levels.js';
 
@@ -88,7 +88,11 @@ export async function renderTeamSettings() {
   catch (err) { toast(err.message, 'error'); return; }
 
   mount(coachChrome('team'), h('main', { class: 'page' },
+    autoResultsCard(team),
     teamCodeCard(team, () => renderTeamSettings()),
+    h('section', { class: 'card stack' },
+      h('div', { class: 'card-head' }, h('h2', {}, 'Invites'), h('a', { href: '#/coach/invites', class: 'btn small' }, 'Open')),
+      h('p', { class: 'muted small' }, 'Swimmer and parent codes, and who has joined.')),
     h('section', { class: 'card stack' },
       h('h2', {}, 'Training groups'),
       h('p', { class: 'muted' }, 'Each group\'s analytics level. Automatic uses each swimmer\'s age (10 & under Developing, 11–14 Age group, 15+ Senior).'),
@@ -107,6 +111,40 @@ export async function renderTeamSettings() {
       h('h2', {}, 'Birth years'),
       h('p', { class: 'muted' }, 'Check or fill in birth years for the whole roster on one screen.'),
       h('a', { href: '#/coach/birthyears', class: 'btn' }, 'Edit birth years'))));
+}
+
+// Where the app looks for new results automatically
+function autoResultsCard(team) {
+  const url = h('input', { type: 'url', inputmode: 'url', value: team.sourceUrl || '', placeholder: 'https://www.pacswim.org/…' });
+  const status = h('p', { class: 'muted small' }, team.sourceUrl
+    ? (team.checkedAt ? `Last checked ${timeAgo(team.checkedAt).toLowerCase()}.` : 'Not checked yet.') + ' Checks when you open the app, up to twice a day.'
+    : 'Off. Paste the Pacific Swimming page where meet results are listed.');
+  const save = h('button', { type: 'submit', class: 'btn primary' }, 'Save');
+  const check = h('button', { type: 'button', class: 'btn', onClick: async () => {
+    await busy(check, async () => {
+      const { runAutoCheck } = await import('./results-auto.js');
+      const res = await runAutoCheck(coachTeam(), { force: true });
+      if (res.error) throw new Error(res.error);
+      toast(res.added ? `${res.added} new meet${res.added === 1 ? '' : 's'} to approve` : 'No new results', 'success');
+      await loadRoles();
+      renderTeamSettings();
+    });
+  } }, 'Check now');
+  const form = h('form', { class: 'stack', onSubmit: async (e) => {
+    e.preventDefault();
+    await busy(save, async () => {
+      const v = url.value.trim();
+      if (v && !/^https?:\/\/(www\.)?pacswim\.org\//i.test(v)) throw new Error('Use a Pacific Swimming (pacswim.org) link.');
+      must(await db.from('teams').update({ results_source_url: v || null }).eq('id', team.id));
+      await loadRoles();
+      toast(v ? 'Automatic results on' : 'Automatic results off', 'success');
+      renderTeamSettings();
+    });
+  } },
+    field('Results list link', url, 'New meets with your team\'s swimmers show up on Home as “Results to approve”. Nothing reaches families until you approve.'),
+    status,
+    h('div', { class: 'row' }, save, team.sourceUrl ? check : null));
+  return h('section', { class: 'card' }, h('h2', {}, 'Automatic results'), form);
 }
 
 // Also used by the upload screen when a team has no code yet

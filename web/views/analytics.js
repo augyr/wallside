@@ -29,9 +29,9 @@ export async function renderEvent(swimmerId, key, mode) {
   if (!distance || !stroke || !['SCY', 'LCM'].includes(course)) { location.hash = back.slice(1); return; }
 
   mount(chrome, h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
-  let me; let results; let goals;
+  let me; let results; let goals; let seeds;
   try {
-    [me, results, goals] = await Promise.all([
+    [me, results, goals, seeds] = await Promise.all([
       db.from('swimmers').select('id, first_name, last_name, birth_year, analytics_level, groups(name, analytics_level)').eq('id', swimmerId).maybeSingle().then(must),
       db.from('results').select('id, time_cs, splits_cs, split_len, status, dq_reason, place, meet_name, meet_date, created_at')
         .eq('swimmer_id', swimmerId).eq('distance', distance).eq('stroke', stroke).eq('course', course)
@@ -39,6 +39,8 @@ export async function renderEvent(swimmerId, key, mode) {
       db.from('goals').select('id, title, target_cs, goal_splits_cs, goal_splits_set_by, course, distance, stroke, status, created_at')
         .eq('swimmer_id', swimmerId).eq('kind', 'time').eq('distance', distance).eq('stroke', stroke).eq('status', 'active')
         .order('created_at', { ascending: false }).then(must),
+      db.from('seed_times').select('time_cs, meets(name, meet_date)').eq('swimmer_id', swimmerId).eq('distance', distance)
+        .eq('stroke', stroke).eq('course', course).then((r) => (r.error ? [] : r.data || [])),
     ]);
   } catch (err) { toast(err.message || String(err), 'error'); return; }
   if (!me) { toast('Swimmer not found', 'error'); return; }
@@ -48,6 +50,9 @@ export async function renderEvent(swimmerId, key, mode) {
   const ok = (results || []).filter((r) => r.status !== 'dq' && r.time_cs);
   const best = ok.reduce((b, r) => (!b || r.time_cs < b.time_cs ? r : b), null);
   const latest = ok.length ? ok[ok.length - 1] : null;
+  const seed = (seeds || []).reduce((b, x) => (!b || x.time_cs < b.time_cs ? x : b), null);
+  const seedBest = seed && (!best || seed.time_cs < best.time_cs) ? seed : null;
+  const bestCs = seedBest ? seedBest.time_cs : best ? best.time_cs : null;
   const goal = (goals || []).find((g) => (g.course || 'SCY') === course && g.target_cs) || null;
 
   const seasonStart = `${seasonStartYear()}-09-01`;
@@ -63,15 +68,16 @@ export async function renderEvent(swimmerId, key, mode) {
       h('p', { class: 'muted small' }, `${me.first_name} ${me.last_name} · ${COURSE_LABEL[course]}`),
       h('span', { class: 'pill level' }, level.label)),
 
-    ok.length ? h('section', { class: 'tiles' },
-      tile('Best', best ? formatTime(best.time_cs) : '—', best ? formatDate(best.meet_date) : ''),
+    ok.length || seedBest ? h('section', { class: 'tiles' },
+      tile('Best', bestCs ? formatTime(bestCs) : '—', seedBest ? 'seed time' : best ? formatDate(best.meet_date) : ''),
       tile('Most recent', latest ? formatTime(latest.time_cs) : '—', latest ? formatDate(latest.meet_date) : ''),
       tile(goal ? 'Goal' : 'This season', goal ? formatTime(goal.target_cs) : (seasonChange !== null ? formatDiff(seasonChange) : '—'),
-        goal ? (best ? (best.time_cs <= goal.target_cs ? 'Reached!' : `${formatTime(best.time_cs - goal.target_cs)} to go`) : '')
+        goal ? (bestCs ? (bestCs <= goal.target_cs ? 'Reached!' : `${formatTime(bestCs - goal.target_cs)} to go`) : '')
           : (seasonChange !== null ? 'first swim → best' : 'one swim so far'),
         goal ? 'goal' : (seasonChange !== null && seasonChange < 0 ? 'good' : ''))) : null,
 
     ok.length >= 2 ? chartCard(ok, goal) : null,
+    seedBest ? h('p', { class: 'muted small' }, `Best time ${formatTime(seedBest.time_cs)} is a seed time${seedBest.meets && seedBest.meets.name ? ` (entered at ${seedBest.meets.name})` : ''} — no splits, so the split table uses the best swim on file.`) : null,
     splitsCard({ me, best, latest, goal, distance, stroke, course, level: level.level, mode, refresh }),
     goal ? null : setGoalCard(me, distance, stroke, course, best, refresh),
     historyCard(results || []),

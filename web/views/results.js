@@ -3,12 +3,9 @@ import { db, state } from '../app.js';
 import { h, mount, must, toast, busy, field, backLink, formatTime, parseTime, eventName, formatDate } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { teamCodeCard } from './coach-extra.js';
-import { parseResultLines, linesFromPdfPages, linesFromText } from '../lib/results-parser.js';
 import { buildReview, estimateBirthYear } from '../lib/matcher.js';
 import { COURSE_LABEL } from '../lib/time.js';
-
-const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs';
-const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs';
+import { readResults, readResultsFromUrl, loadRosterAndBests, seedsFor, approveInboxItem, dismissInboxItem } from './results-auto.js';
 
 // ------------------------------------------------------------------
 // Meets list
@@ -16,18 +13,22 @@ const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.
 export async function renderResults() {
   const team = coachTeam();
   mount(coachChrome('results'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
-  let meets; let results;
+  let meets; let results; let inbox;
   try {
-    [meets, results] = await Promise.all([
+    [meets, results, inbox] = await Promise.all([
       db.from('meets').select('id, name, meet_date, course, created_at').eq('team_id', team.id).order('meet_date', { ascending: false }).then(must),
       db.from('results').select('meet_id').eq('team_id', team.id).then(must),
+      db.from('results_inbox').select('id, kind, status, meet_name, meet_date, course, summary, payload, source_url, meet_id')
+        .eq('team_id', team.id).eq('status', 'pending').then((r) => (r.error ? [] : r.data || [])),
     ]);
   } catch (err) { toast(err.message, 'error'); return; }
   const counts = {};
   for (const r of results || []) if (r.meet_id) counts[r.meet_id] = (counts[r.meet_id] || 0) + 1;
 
   mount(coachChrome('results'), h('main', { class: 'page' },
-    h('a', { href: '#/coach/upload', class: 'btn primary center' }, 'Upload meet results'),
+    inboxCard(inbox, team.id, () => renderResults()),
+    h('a', { href: '#/coach/upload', class: 'btn primary center' }, 'Add meet results'),
+    team.sourceUrl ? null : h('a', { href: '#/coach/team', class: 'notice-link quiet' }, 'Turn on automatic results →'),
     (meets || []).length
       ? h('section', { class: 'card' },
           h('h2', {}, 'Meets'),
@@ -39,7 +40,7 @@ export async function renderResults() {
               h('span', { class: 'pill' }, `${counts[m.id] || 0} swims`))))))
       : h('section', { class: 'card empty' },
           h('h3', {}, 'No meets yet'),
-          h('p', { class: 'muted' }, 'Upload a results PDF or a saved HY-TEK results page. You\'ll review every swim before families see anything.'))));
+          h('p', { class: 'muted' }, 'Paste a Pacific Swimming results link or upload a results PDF. You\'ll review every swim before families see anything.'))));
 }
 
 // ------------------------------------------------------------------
@@ -63,7 +64,7 @@ export async function renderUpload() {
     if (!file) return;
     status.textContent = 'Reading ' + file.name + '…';
     try {
-      const parsed = await readResultsFile(file);
+      const parsed = await readResults({ name: file.name, type: file.type, buffer: await file.arrayBuffer() });
       if (!parsed.swims.length) throw new Error('No individual swims found in that file. Is it a HY-TEK results PDF or results page?');
       await renderReview(parsed, file.name);
     } catch (err) {
@@ -72,66 +73,33 @@ export async function renderUpload() {
     }
   });
 
+  const link = h('input', { type: 'url', inputmode: 'url', placeholder: 'https://www.pacswim.org/…/meet-results.htm', 'aria-label': 'Results link' });
+  const go = h('button', { type: 'submit', class: 'btn primary' }, 'Read results');
+  const linkForm = h('form', { class: 'stack', onSubmit: async (e) => {
+    e.preventDefault();
+    await busy(go, async () => {
+      const url = link.value.trim();
+      if (!url) throw new Error('Paste the link to the results page or PDF.');
+      const parsed = await readResultsFromUrl(url);
+      if (!parsed.swims.length) throw new Error('No individual swims found at that link. Use the link to the results themselves, not the meet page.');
+      await renderReview(parsed, parsed.meet.name || 'Meet results', { url: parsed.url });
+    });
+  } }, field('Results link', link, 'From Pacific Swimming (pacswim.org) — the results page or PDF itself.'), go);
+
   mount(coachChrome('results'), h('main', { class: 'page' },
     backLink('#/coach/results', 'Results'),
-    h('h1', {}, 'Upload meet results'),
+    h('h1', {}, 'Add meet results'),
     h('section', { class: 'card stack' },
-      field('Results file', input, 'A HY-TEK results PDF, or a results web page saved as a file (in your browser: File → Save Page As).'),
-      status,
-      h('p', { class: 'muted small' }, `Only swims for ${team.code} are kept. The file itself isn't stored, and nothing is published until you confirm.`)),
-    h('section', { class: 'card' },
-      h('h2', {}, 'What happens next'),
-      h('ol', { class: 'steps' },
-        h('li', {}, 'The file is read on this device.'),
-        h('li', {}, 'You review: matched swims, names that need a match, flagged swims and unattached swimmers.'),
-        h('li', {}, 'Fix anything, then confirm. Only then do families see the results.')))));
+      h('h2', {}, 'Paste a link'),
+      linkForm),
+    h('section', { class: 'card stack' },
+      h('h2', {}, 'Or upload a file'),
+      field('Results file', input, 'A HY-TEK results PDF, or a results web page saved as a file.'),
+      status),
+    h('p', { class: 'muted small' }, `Only swims for ${team.code} are kept, plus seed times faster than anything on file. Nothing is published until you confirm.`)));
 }
 
-async function readResultsFile(file) {
-  const name = file.name.toLowerCase();
-  if (name.endsWith('.pdf') || file.type === 'application/pdf') {
-    const pdfjs = await import(PDFJS);
-    pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-    const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
-    const pages = [];
-    for (let i = 1; i <= doc.numPages; i++) {
-      const page = await doc.getPage(i);
-      const vp = page.getViewport({ scale: 1 });
-      const tc = await page.getTextContent();
-      pages.push({
-        width: vp.width,
-        items: tc.items.filter((it) => it.str && it.str.trim())
-          .map((it) => ({ str: it.str, x: it.transform[4], y: vp.height - it.transform[5], w: it.width })),
-      });
-    }
-    return { ...parseResultLines(linesFromPdfPages(pages)), source: 'pdf' };
-  }
-  const html = await file.text();
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('script, style').forEach((el) => el.remove());
-  doc.querySelectorAll('br').forEach((br) => br.replaceWith('\n'));
-  doc.querySelectorAll('tr, p, div, h1, h2, h3, h4, li').forEach((el) => el.append('\n'));
-  return { ...parseResultLines(linesFromText(doc.body ? doc.body.textContent : html)), source: 'html' };
-}
-
-async function loadRosterAndBests(teamId) {
-  const [roster, results] = await Promise.all([
-    db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, also_known_as, usually_unattached, archived')
-      .eq('team_id', teamId).then(must),
-    db.from('results').select('swimmer_id, distance, stroke, course, time_cs, status').eq('team_id', teamId).then(must),
-  ]);
-  const bests = {};
-  for (const r of results || []) {
-    if (r.status === 'dq' || !r.time_cs) continue;
-    const key = `${r.distance}-${r.stroke}`;
-    bests[r.course] = bests[r.course] || {};
-    const byS = (bests[r.course][r.swimmer_id] = bests[r.course][r.swimmer_id] || {});
-    if (!byS[key] || r.time_cs < byS[key]) byS[key] = r.time_cs;
-  }
-  return { roster: (roster || []).filter((s) => !s.archived), bests };
-}
-
-async function renderReview(parsed, fileName) {
+export async function renderReview(parsed, fileName, opts = {}) {
   const team = coachTeam();
   const { roster, bests } = await loadRosterAndBests(team.id);
   const courses = [...new Set(parsed.swims.map((s) => s.course))];
@@ -160,19 +128,21 @@ async function renderReview(parsed, fileName) {
     p.markUnattached = true;
   }
   for (const p of [...groups.matched, ...groups.needsMatch, ...groups.unattached, ...groups.notOnRoster]) {
-    for (const s of p.swims) { s.include = true; s.editTime = s.timeCs; }
+    for (const s of p.swims) { s.include = true; s.editTime = s.timeCs; s.keepSeed = true; }
   }
+  const seedState = { bests };
 
   const draw = () => mount(coachChrome('results'), h('main', { class: 'page' },
-    backLink('#/coach/upload', 'Choose a different file'),
+    opts.inboxItem ? backLink('#/coach', 'Home') : backLink('#/coach/upload', 'Choose a different file'),
     h('h1', {}, 'Review results'),
     meetCard(meet, fileCourse, parsed, counts, team, draw),
     groups.needsMatch.length ? decisionSection('Needs a match', groups.needsMatch, roster, rosterById, false, draw) : null,
     flaggedSection([...groups.matched, ...[...groups.needsMatch, ...groups.notOnRoster].filter((p) => p.choice && p.choice !== 'skip')], rosterById),
     groups.unattached.length ? decisionSection('Unattached swimmers', groups.unattached, roster, rosterById, true, draw) : null,
     groups.notOnRoster.length ? notOnRosterSection(groups.notOnRoster, roster, rosterById, draw) : null,
+    seedSection(meet, groups, rosterById, seedState),
     matchedSection(groups.matched, rosterById, meet),
-    publishCard(meet, groups, rosterById, parsed)));
+    publishCard(meet, groups, rosterById, parsed, seedState, opts)));
   draw();
 }
 
@@ -204,6 +174,43 @@ function meetCard(meet, fileCourse, parsed, counts, team, redraw) {
     h('p', { class: 'muted small' },
       `${plural(ours, 'swim')} for ${team.code} (incl. unattached) · ${plural(counts.otherTeams, 'other-team swim')} ignored · ${plural(counts.noShows, 'no-show')} skipped`
       + (parsed.ignoredEvents ? ` · ${parsed.ignoredEvents} relay events skipped` : '')));
+}
+
+
+// Seed times faster than anything on file — kept by default (usually a swimmer's real best)
+function chosenPeople(groups) {
+  return [...groups.matched, ...[...groups.needsMatch, ...groups.unattached, ...groups.notOnRoster]
+    .filter((p) => p.choice && p.choice !== 'skip' && p.choice !== 'new')];
+}
+function seedList(meet, groups, seedState) {
+  const course = meet.course || 'LCM';
+  return seedsFor(chosenPeople(groups), (seedState.bests || {})[course] || {}, (p) => p.swimmerId || (p.choice !== 'new' ? p.choice : null));
+}
+
+function seedSection(meet, groups, rosterById, seedState) {
+  if (!meet.course || meet.course === 'SCM') return null;
+  const list = seedList(meet, groups, seedState);
+  if (!list.length) return null;
+  const all = h('input', { type: 'checkbox', checked: list.every((x) => x.swim.keepSeed) ? true : null,
+    onChange: (e) => { list.forEach((x) => { x.swim.keepSeed = e.target.checked; }); boxes.forEach((b) => { b.checked = e.target.checked; }); } });
+  const boxes = [];
+  const rows = list.map((x) => {
+    const sw = rosterById[x.swimmer_id];
+    const box = h('input', { type: 'checkbox', checked: x.swim.keepSeed ? true : null, 'aria-label': 'Keep this seed time',
+      onChange: (e) => { x.swim.keepSeed = e.target.checked; } });
+    boxes.push(box);
+    return h('li', { class: 'swim-row' }, box,
+      h('span', { class: 'grow' },
+        h('strong', { class: 'block' }, sw ? `${sw.first_name} ${sw.last_name}` : x.person.name),
+        h('span', { class: 'small muted' }, `${eventName(x.distance, x.stroke)} · swam ${x.swim.status === 'dq' ? 'DQ' : formatTime(x.swim.timeCs)}`)),
+      h('span', { class: 'time small-time' }, formatTime(x.time_cs)));
+  });
+  return h('details', { class: 'card' },
+    h('summary', {}, `${list.length} seed time${list.length === 1 ? '' : 's'} faster than anything on file — kept as best times`),
+    h('div', { class: 'stack' },
+      h('p', { class: 'muted small' }, 'Shown to families as “from seed time”. A real swim that beats it takes over. Untick any that look wrong.'),
+      h('label', { class: 'check small' }, all, h('span', {}, 'Keep all')),
+      h('ul', { class: 'list' }, rows)));
 }
 
 function swimLabel(s) {
@@ -315,10 +322,15 @@ function matchedSection(people, rosterById, meet) {
       }))));
 }
 
-function publishCard(meet, groups, rosterById, parsed) {
-  const replaceBox = h('input', { type: 'checkbox' });
-  const replaceLabel = h('label', { class: 'check small', hidden: true }, replaceBox,
-    h('span', {}, 'This meet was already uploaded — replace the earlier upload'));
+function publishCard(meet, groups, rosterById, parsed, seedState, opts) {
+  // When the meet is already uploaded: add just the seed times (default) or replace the upload
+  let again = 'seeds';
+  const againBox = h('fieldset', { class: 'stack', hidden: true },
+    h('legend', { class: 'label' }, 'This meet was already uploaded.'),
+    [['seeds', 'Only add seed times to the earlier upload (keeps any fixes you made)'], ['replace', 'Replace the earlier upload']]
+      .map(([v, label]) => h('label', { class: 'check small' },
+        h('input', { type: 'radio', name: 'again', value: v, checked: v === 'seeds' ? true : null, onChange: () => { again = v; } }),
+        h('span', {}, v === 'replace' ? 'Replace the earlier upload' : label))));
   const btn = h('button', { type: 'button', class: 'btn primary', onClick: () => publish() }, 'Confirm and publish');
   const msg = h('p', { class: 'muted small' }, 'Families see these results as soon as you publish. You can still fix or remove any swim afterwards.');
 
@@ -360,17 +372,35 @@ function publishCard(meet, groups, rosterById, parsed) {
         });
       }
       if (!swims.length) throw new Error('Nothing selected to publish.');
+      const seeds = seedList(meet, groups, seedState).filter((x) => x.swim.keepSeed)
+        .map((x) => ({ swimmer_id: x.swimmer_id, distance: x.distance, stroke: x.stroke, time_cs: x.time_cs }));
 
       let meetId;
+      if (!againBox.hidden && again === 'seeds') {
+        const earlier = must(await db.from('meets').select('id, name, meet_date').eq('team_id', team.id).eq('meet_date', meet.date))
+          .find((m) => m.name.trim().toLowerCase() === meet.name.trim().toLowerCase());
+        if (!earlier) throw new Error('Couldn\'t find the earlier upload — choose “Replace”.');
+        const n = seeds.length ? must(await db.rpc('add_seed_times', { p_meet: earlier.id, p_seeds: seeds })) : 0;
+        if (opts.inboxItem) await approveDone(opts.inboxItem, earlier.id);
+        toast(n ? `${n} seed time${n === 1 ? '' : 's'} added` : 'No new seed times — everything is already on file', 'success');
+        location.hash = `/coach/results/${earlier.id}`;
+        return;
+      }
       try {
         meetId = must(await db.rpc('import_meet', {
-          p_team: team.id, p_meet: { name: meet.name.trim(), meet_date: meet.date, course: meet.course, source: parsed.source },
-          p_swims: swims, p_replace: replaceBox.checked,
+          p_team: team.id, p_meet: { name: meet.name.trim(), meet_date: meet.date, course: meet.course, source: parsed.source, source_url: opts.url || null },
+          p_swims: swims, p_replace: !againBox.hidden && again === 'replace',
         }));
       } catch (err) {
-        if (/already uploaded/i.test(err.message || '')) { replaceLabel.hidden = false; }
+        if (/already uploaded/i.test(err.message || '')) {
+          againBox.hidden = false;
+          btn.textContent = 'Confirm';
+          throw new Error('This meet was already uploaded — choose what to do, then confirm.');
+        }
         throw err;
       }
+      if (seeds.length) must(await db.rpc('add_seed_times', { p_meet: meetId, p_seeds: seeds }));
+      if (opts.inboxItem) await approveDone(opts.inboxItem, meetId);
 
       // Remember names, unattached, and fill birth years
       for (const p of [...groups.needsMatch, ...groups.unattached]) {
@@ -392,11 +422,67 @@ function publishCard(meet, groups, rosterById, parsed) {
           }
         }
       }
-      toast(`${swims.length} swims published`, 'success');
+      toast(`${swims.length} swims published` + (seeds.length ? ` · ${seeds.length} seed times` : ''), 'success');
       location.hash = `/coach/results/${meetId}`;
     });
   }
-  return h('section', { class: 'card stack sticky-bottom' }, replaceLabel, msg, btn);
+  return h('section', { class: 'card stack sticky-bottom' }, againBox, msg, btn);
+}
+
+async function approveDone(item, meetId) {
+  must(await db.from('results_inbox').update({ status: 'approved', meet_id: meetId, decided_by: state.user.id, decided_at: new Date().toISOString() }).eq('id', item.id));
+}
+
+// ------------------------------------------------------------------
+// A results-inbox item opened for full review
+// ------------------------------------------------------------------
+export async function renderInboxReview(id) {
+  mount(coachChrome('home'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Reading results from Pacific Swimming…')));
+  try {
+    const item = must(await db.from('results_inbox').select('*').eq('id', id).maybeSingle());
+    if (!item) throw new Error('That item is gone.');
+    let parsed;
+    if (item.payload && item.payload.parsed) parsed = item.payload.parsed;     // demo
+    else parsed = await readResultsFromUrl(item.source_url);
+    await renderReview(parsed, item.meet_name || 'Meet results', { url: item.source_url, inboxItem: item });
+  } catch (err) {
+    toast(err.message || String(err), 'error');
+    location.hash = '/coach';
+  }
+}
+
+// ------------------------------------------------------------------
+// "Results to approve" — shown on the coach home and Results tab
+// ------------------------------------------------------------------
+export function inboxCard(items, teamId, onChange) {
+  const pending = (items || []).filter((i) => i.status === 'pending');
+  if (!pending.length) return null;
+  return h('section', { class: 'card stack inbox' },
+    h('div', { class: 'card-head' }, h('h2', {}, 'Results to approve'), h('span', { class: 'pill warn' }, String(pending.length))),
+    h('ul', { class: 'list' }, pending.map((item) => {
+      const sm = item.summary || {};
+      const approve = h('button', { type: 'button', class: 'btn primary small', onClick: async () => {
+        await busy(approve, async () => {
+          const res = await approveInboxItem(item, teamId);
+          toast(item.kind === 'seeds' ? `${res.seeds} seed times added` : `${res.swims} swims published` + (res.seeds ? ` · ${res.seeds} seed times` : ''), 'success');
+          onChange();
+        });
+      } }, 'Approve all');
+      const dismiss = h('button', { type: 'button', class: 'btn small ghost', onClick: async () => {
+        await busy(dismiss, async () => { await dismissInboxItem(item); onChange(); });
+      } }, 'Not now');
+      const line = item.kind === 'seeds'
+        ? `${sm.seeds || 0} seed time${sm.seeds === 1 ? '' : 's'} for a meet you already uploaded`
+        : [`${sm.swims || 0} swims · ${sm.swimmers || 0} swimmers`, sm.seeds ? `${sm.seeds} seed times` : null].filter(Boolean).join(' · ');
+      const held = (sm.heldPeople || 0) + (sm.heldSwims || 0);
+      return h('li', { class: 'stack tight' },
+        h('div', {}, h('strong', {}, item.meet_name || 'Meet results'),
+          h('span', { class: 'muted small block' }, [formatDate(item.meet_date), item.course && item.course !== 'MIXED' ? item.course : null].filter(Boolean).join(' · '))),
+        h('p', { class: 'small' }, line),
+        held ? h('p', { class: 'small warn-text' }, `${held} held for you to check` + (sm.heldNames && sm.heldNames.length ? `: ${sm.heldNames.slice(0, 3).join('; ')}${sm.heldNames.length > 3 ? '…' : ''}` : '')) : null,
+        h('div', { class: 'row' }, approve, item.kind === 'seeds' ? null : h('a', { href: `#/coach/inbox/${item.id}`, class: 'btn small' }, 'Review'), dismiss));
+    })),
+    h('p', { class: 'muted small' }, 'Approve all publishes only sure matches. Anything uncertain is held for you.'));
 }
 
 // ------------------------------------------------------------------

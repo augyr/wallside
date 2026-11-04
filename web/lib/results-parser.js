@@ -79,8 +79,23 @@ export function parseSwimLine(line) {
     timeCs = parseTime(times[times.length - 1]);
   }
 
+  // Seed (entry) time: the first time-like token before the result, when there are two.
+  // "25.10L" / "1:05.20Y" are converted from another course and "NT" means no time — no seed.
+  let seedCs = null;
+  let seedConverted = false;
+  const seedish = (x) => /^x?(\d{1,2}:)?\d{1,2}\.\d{2}[LYS]?$/i.test(x) || /^NT$/i.test(x);
+  const endIdx = statusIdx >= 0 ? statusIdx : rest.length;
+  const before = rest.slice(0, endIdx).filter(seedish);
+  if ((statusIdx >= 0 && before.length >= 1) || (statusIdx < 0 && before.length >= 2)) {
+    const tok = before[0].replace(/^x/i, '');
+    if (/[LYS]$/i.test(tok)) seedConverted = true;
+    else if (!/^NT$/i.test(tok)) seedCs = parseTime(tok);
+  }
+
   const placeNum = placeTok.replace(/[^0-9]/g, '');
   return {
+    seedCs,
+    seedConverted,
     place: placeNum ? Number(placeNum) : null,
     name: nameToks.join(' '),
     age,

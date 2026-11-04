@@ -4,6 +4,7 @@ import { db, state, topBar } from '../app.js';
 import { h, mount, must, toast, busy, field, formatTime, eventName, timeAgo, emptyCard, parseTime, formatDate, backLink } from '../ui.js';
 import { EVENTS, COURSE_LABEL } from '../lib/time.js';
 import { analyticsLevel } from '../lib/levels.js';
+import { bestTimes } from '../lib/bests.js';
 
 const TAGS = { great: 'Great improvement', keep_working: 'Keep working', new_focus: 'New focus' };
 const KINDS = { time: 'Time', practice: 'Practice', technique: 'Technique', other: 'Other' };
@@ -13,6 +14,10 @@ export function currentCourse() { return course; }
 
 export function swimmerHref(mode, id) {
   return mode === 'coach' ? `#/coach/s/${id}` : `#/family/${id}`;
+}
+
+function isoToday() {
+  const x = new Date(); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10);
 }
 
 async function loadSwimmer(me) {
@@ -26,21 +31,28 @@ async function loadSwimmer(me) {
 
   const monthStart = new Date();
   monthStart.setDate(1);
-  const [notes, goals, results, attendance, account, parents] = await Promise.all([
+  const today = isoToday();
+  const [notes, goals, results, attendance, account, parents, seeds] = await Promise.all([
     notesQuery,
     db.from('goals').select('id, kind, title, course, due_label, status, created_at, created_by, distance, stroke, target_cs')
       .eq('swimmer_id', me.id).eq('status', 'active').order('created_at', { ascending: false }),
     db.from('results').select('distance, stroke, course, time_cs, status, meet_name, meet_date').eq('swimmer_id', me.id),
-    db.from('attendance').select('status, parent_reported, practices!inner(practice_date, session)').eq('swimmer_id', me.id)
+    db.from('attendance').select('status, parent_reported, reason, practices!inner(practice_date, session)').eq('swimmer_id', me.id)
       .gte('practices.practice_date', monthStart.toISOString().slice(0, 10)),
     db.from('swimmer_accounts').select('swimmer_id').eq('swimmer_id', me.id),
     db.from('guardians').select('swimmer_id').eq('swimmer_id', me.id),
+    db.from('seed_times').select('distance, stroke, course, time_cs, meets(name, meet_date)').eq('swimmer_id', me.id)
+      .then((r) => (r.error ? { data: [], error: null } : r)),
   ]);
+  const att = must(attendance) || [];
   return {
     notes: must(notes) || [],
     goals: must(goals) || [],
     results: must(results) || [],
-    attendance: must(attendance) || [],
+    attendance: att.filter((a) => a.practices.practice_date <= today),
+    upcoming: att.filter((a) => a.practices.practice_date >= today && a.parent_reported)
+      .sort((a, b) => a.practices.practice_date.localeCompare(b.practices.practice_date)),
+    seeds: must(seeds) || [],
     hasOwnLogin: (must(account) || []).length > 0,
     hasParent: (must(parents) || []).length > 0,
   };
@@ -97,26 +109,63 @@ export async function renderSwimmerPage(id, mode, opts = {}) {
     switcher,
     h('main', { class: 'page' },
       header,
-      timesSection(me, data.results, mode, refresh),
-      goalsSection(me, data.goals, refresh),
+      glance(me, data, mode, role),
       mode === 'family' && role === 'self' && !data.hasParent
         ? h('section', { class: 'card empty' },
             h('div', { class: 'card-head' }, h('h2', {}, "Coach's notes"), h('span', { class: 'pill' }, 'Locked')),
             h('p', { class: 'muted' }, 'Coach notes and messages turn on once a parent or guardian joins — every message goes to you and your parents together. Ask a parent to join with the parent code from your coach.'))
-        : notesSection(me, data.notes, mode, refresh),
-      attendanceSection(me, data.attendance, role),
+        : notesSection(me, data.notes, mode, refresh, data.hasParent),
+      timesSection(me, data.results, mode, refresh, data.seeds),
+      goalsSection(me, data.goals, refresh),
+      attendanceSection(me, data, role, refresh),
       mode === 'family' && role === 'guardian' ? swimmerLoginSection(me, data.hasOwnLogin) : null));
 }
 
 // ------------------------------------------------------------------
-function notesSection(me, notes, mode, refresh) {
-  if (!notes.length) {
-    return emptyCard("Coach's notes",
-      `Notes from ${me.first_name}'s coach will show here — what they're working on and how it's going. Every note goes to ${me.first_name} and their parents together.`);
+// At a glance: three small tiles (attendance, goals, latest note / working on)
+function glance(me, data, mode, role) {
+  const att = data.attendance;
+  const here = att.filter((r) => r.status !== 'out').length;
+  const focus = (data.notes.find((n) => n.focus) || {}).focus;
+  const latest = data.notes[0];
+  const locked = mode === 'family' && role === 'self' && !data.hasParent;
+  const tile = (label, value, sub) => h('div', { class: 'tile' },
+    h('span', { class: 'small muted' }, label), h('span', { class: 'tile-value' }, value), sub ? h('span', { class: 'small muted' }, sub) : null);
+  return h('section', { class: 'tiles' },
+    tile('Attendance', att.length ? `${here}/${att.length}` : '—', new Date().toLocaleDateString(undefined, { month: 'long' })),
+    tile('Goals', String(data.goals.length), data.goals.length ? 'active' : 'none yet'),
+    locked || !latest ? tile('Coach notes', locked ? '🔒' : '—', locked ? 'parent joins first' : 'none yet')
+      : focus ? h('div', { class: 'tile' }, h('span', { class: 'small muted' }, 'Working on'), h('span', { class: 'tile-text' }, focus), h('span', { class: 'small muted' }, timeAgo(latest.created_at)))
+        : tile('Latest note', timeAgo(latest.created_at), TAGS[latest.tag] || ''));
+}
+
+function notesSection(me, notes, mode, refresh, hasParent) {
+  const composer = mode === 'coach' ? h('details', { class: 'add-goal' },
+    h('summary', {}, `+ Note to ${me.first_name}`), h('div', { class: 'composer-slot' })) : null;
+  if (composer) {
+    composer.addEventListener('toggle', async () => {
+      const slot = composer.querySelector('.composer-slot');
+      if (!composer.open || slot.childElementCount) return;
+      const { noteComposer } = await import('./coach-home.js');
+      const { coachTeam } = await import('./coach.js');
+      slot.append(noteComposer({ team: coachTeam(), preset: [me.id], onSent: refresh,
+        data: { swimmers: [me], groups: [], joined: { [me.id]: hasParent ? 1 : 0 } } }));
+    }, { once: false });
   }
+  if (!notes.length) {
+    return h('section', { class: 'card empty' },
+      h('h3', {}, "Coach's notes"),
+      h('p', { class: 'muted' }, `Notes from ${me.first_name}'s coach will show here — what they're working on and how it's going. Every note goes to ${me.first_name} and their parents together.`),
+      composer);
+  }
+  const first = notes.slice(0, 2);
+  const rest = notes.slice(2);
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', {}, "Coach's notes"), h('span', { class: 'muted small' }, 'Shared with swimmer & parents')),
-    h('ul', { class: 'list' }, notes.map((n) => noteItem(n, refresh))));
+    h('ul', { class: 'list' }, first.map((n) => noteItem(n, refresh))),
+    rest.length ? h('details', {}, h('summary', { class: 'small' }, `${rest.length} earlier note${rest.length === 1 ? '' : 's'}`),
+      h('ul', { class: 'list' }, rest.map((n) => noteItem(n, refresh)))) : null,
+    composer);
 }
 
 function noteItem(n, refresh) {
@@ -204,12 +253,8 @@ function goalsSection(me, goals, refresh) {
 }
 
 // ------------------------------------------------------------------
-function timesSection(me, results, mode, refresh) {
-  const best = {};
-  for (const r of results.filter((x) => x.course === course && x.status !== 'dq' && x.time_cs)) {
-    const key = `${r.distance}-${r.stroke}`;
-    if (!best[key] || r.time_cs < best[key].time_cs) best[key] = r;
-  }
+function timesSection(me, results, mode, refresh, seeds = []) {
+  const best = bestTimes(results, seeds)[course] || {};
   const order = EVENTS[course].map(([d, s]) => `${d}-${s}`);
   const rows = Object.entries(best).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
 
@@ -217,33 +262,84 @@ function timesSection(me, results, mode, refresh) {
     ['SCY', 'LCM'].map((c) => h('button', { type: 'button', class: c === course ? 'on' : '', 'aria-pressed': c === course ? 'true' : 'false',
       onClick: () => { course = c; refresh(); } }, COURSE_LABEL[c])));
 
+  const item = ([key, r]) => {
+    const [d, st] = key.split('-');
+    return h('li', {},
+      h('a', { class: 'list-row row-link compact', href: `${swimmerHref(mode, me.id)}/e/${key}-${course}` },
+        h('span', { class: 'grow' },
+          h('strong', {}, eventName(Number(d), st)),
+          h('span', { class: 'muted small block' }, r.fromSeed
+            ? ['from seed time', r.meet_name ? 'entered at ' + r.meet_name : null].filter(Boolean).join(' · ')
+            : [r.meet_name, formatDate(r.meet_date)].filter(Boolean).join(' · '))),
+        h('span', { class: 'time' }, formatTime(r.time_cs)),
+        h('span', { 'aria-hidden': 'true', class: 'chev' }, '›')));
+  };
+  const top = rows.slice(0, 6);
+  const more = rows.slice(6);
   return h('section', { class: 'card' },
-    h('div', { class: 'card-head' }, h('h2', {}, 'Best times'), rows.length ? h('span', { class: 'muted small' }, 'Tap an event for analytics') : null),
+    h('div', { class: 'card-head' }, h('h2', {}, 'Best times'), rows.length ? h('span', { class: 'muted small' }, 'Tap for analytics') : null),
     toggle,
     rows.length
-      ? h('ul', { class: 'list' }, rows.map(([key, r]) => h('li', {},
-          h('a', { class: 'list-row row-link', href: `${swimmerHref(mode, me.id)}/e/${key}-${course}` },
-            h('span', { class: 'grow' },
-              h('strong', {}, eventName(r.distance, r.stroke)),
-              h('span', { class: 'muted small block' }, [r.meet_name, formatDate(r.meet_date)].filter(Boolean).join(' · '))),
-            h('span', { class: 'time' }, formatTime(r.time_cs)),
-            h('span', { 'aria-hidden': 'true', class: 'chev' }, '›')))))
+      ? [h('ul', { class: 'list' }, top.map(item)),
+         more.length ? h('details', {}, h('summary', { class: 'small' }, `${more.length} more event${more.length === 1 ? '' : 's'}`), h('ul', { class: 'list' }, more.map(item))) : null]
       : h('p', { class: 'muted' }, `${me.first_name}'s ${course === 'SCY' ? 'yards' : 'long course'} times will show here after a meet, once the coach uploads results. Yards and meters are always kept separate.`));
 }
 
 // ------------------------------------------------------------------
-function attendanceSection(me, rows, role) {
+function attendanceSection(me, data, role, refresh) {
+  const rows = data.attendance;
   const counted = rows.filter((r) => r.status !== 'out').length;
   const total = rows.length;
   const month = new Date().toLocaleDateString(undefined, { month: 'long' });
+  const report = role === 'guardian' ? absenceForm(me, data.upcoming, refresh) : null;
   if (!total) {
-    return emptyCard('Attendance',
-      `Practices ${me.first_name} attends will be counted here once the coach takes attendance. Morning and afternoon practices count separately.`);
+    return h('section', { class: 'card' + (report ? '' : ' empty') },
+      h('h3', {}, 'Attendance'),
+      h('p', { class: 'muted' }, `Practices ${me.first_name} attends will be counted here once the coach takes attendance. Morning and afternoon practices count separately.`),
+      report);
   }
+  const late = rows.filter((r) => r.status === 'late').length;
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', {}, 'Attendance'), h('span', { class: 'muted small' }, month)),
-    h('p', { class: 'stat' }, `${counted}/${total}`, h('span', { class: 'muted small' }, ' practices attended')),
-    role === 'guardian' ? h('p', { class: 'muted small' }, 'Absence reporting arrives with the coach attendance screen.') : null);
+    h('p', {}, h('span', { class: 'stat' }, `${counted}/${total}`), h('span', { class: 'muted small' }, ` practices${late ? ` · ${late} late` : ''}`)),
+    report);
+}
+
+// Parents: report an absence ahead of time; see and cancel what they reported
+function absenceForm(me, upcoming, refresh) {
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
+  const date = h('input', { type: 'date', value: isoTodayPlus(1), min: isoToday() });
+  const ses = h('select', {}, h('option', { value: 'PM' }, 'Afternoon (PM)'), h('option', { value: 'AM' }, 'Morning (AM)'), h('option', { value: 'BOTH' }, 'Both'));
+  const reason = h('input', { type: 'text', maxlength: 200, placeholder: 'Optional — e.g. dentist' });
+  const btn = h('button', { type: 'submit', class: 'btn' }, 'Report absence');
+  const form = h('form', { class: 'stack', onSubmit: async (e) => {
+    e.preventDefault();
+    await busy(btn, async () => {
+      if (!date.value) throw new Error('Pick a date.');
+      for (const s of ses.value === 'BOTH' ? ['AM', 'PM'] : [ses.value]) {
+        must(await db.rpc('report_absence', { p_swimmer: me.id, p_date: date.value, p_session: s, p_reason: reason.value.trim() || null }));
+      }
+      toast('Coach will see it on the attendance list', 'success');
+      refresh();
+    });
+  } }, h('div', { class: 'grid2' }, field('Date', date), field('Practice', ses)), field('Reason', reason), btn);
+  return h('div', { class: 'stack tight' },
+    upcoming.length ? h('ul', { class: 'list' }, upcoming.map((a) => {
+      const cancel = h('button', { type: 'button', class: 'btn small ghost', onClick: async () => {
+        await busy(cancel, async () => {
+          must(await db.rpc('cancel_absence', { p_swimmer: me.id, p_date: a.practices.practice_date, p_session: a.practices.session }));
+          refresh();
+        });
+      } }, 'Cancel');
+      return h('li', { class: 'list-row compact' },
+        h('span', { class: 'grow' }, h('strong', { class: 'small' }, `Out · ${formatDate(a.practices.practice_date)} ${a.practices.session}`),
+          a.reason ? h('span', { class: 'muted small block' }, a.reason) : null), cancel);
+    })) : null,
+    h('details', { class: 'add-goal' }, h('summary', {}, `+ Report ${me.first_name} out`), form));
+}
+
+function isoTodayPlus(n) {
+  const x = new Date(); x.setDate(x.getDate() + n); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10);
 }
 
 // ------------------------------------------------------------------

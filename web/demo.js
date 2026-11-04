@@ -2,6 +2,28 @@
 // client the app uses. Nothing here is real and nothing is saved.
 import { goalSplits } from './lib/goalsplits.js';
 import { formatTime, eventName } from './lib/time.js';
+import { parseResultLines, linesFromText } from './lib/results-parser.js';
+
+// A made-up meet waiting in "Results to approve"
+const INBOX_TEXT = `HY-TEK's MEET MANAGER 8.0 - 9:00 PM  11/2/2026  Page 1
+             PASA Turkey Time Trial - 11/1/2026
+                                Results
+Girls 100 Yard Freestyle
+===============================================================================
+    Name                    Age Team                    Seed Time  Finals Time
+===============================================================================
+  1 Quinn, Harper R          17 PASA-PC                    52.95      53.40
+      12.62      25.98 (13.36)      39.70 (13.72)      53.40 (13.70)
+  2 Marchetti, Sofia         14 PASA-PC                    58.90      59.12
+  3 Other, Kid               15 OTHR-PC                    57.50      57.00
+Boys 100 Yard Freestyle
+===============================================================================
+  1 Fischer, Elijah M        15 PASA-PC                    51.50      51.62
+  2 Ward, Caleb              17 PASA-PC                    49.60      49.95
+Boys 100 Yard Breaststroke
+===============================================================================
+  1 Castillo, Owen           16 PASA-PC                  1:00.10    1:00.85
+`;
 
 const TEAM = 'demo-team';
 const USERS = {
@@ -151,13 +173,52 @@ function buildData() {
     }
   }
 
+  // More personal notes so feedback coverage looks real
+  [['s-2', 3, 'keep_working', 'Pullouts', 'Keep working on a long, patient pullout — you rushed the last two.'],
+   ['s-7', 6, 'great', null, 'Great improvement on your 200 fly pacing. Even splits!'],
+   ['s-3', 12, 'new_focus', 'Backstroke starts', 'New focus: get your hips up on the start.']].forEach(([sw, ago, tag, focus, body]) =>
+    notes.push({ id: nid('n'), team_id: TEAM, swimmer_id: sw, group_id: null, author_id: USERS.coach.id, tag, focus, body, created_at: daysAgo(ago).toISOString() }));
+
+  // Today's afternoon practice for the senior group, already started
+  const todayP = { id: nid('p'), team_id: TEAM, group_id: 'g-senior', practice_date: iso(today), session: today.getHours() < 12 ? 'AM' : 'PM' };
+  if (!practices.some((p) => p.practice_date === todayP.practice_date && p.session === todayP.session)) {
+    practices.push(todayP);
+    ['s-1', 's-2', 's-3', 's-4', 's-5', 's-6', 's-7', 's-8'].forEach((sw, i) => attendance.push({
+      practice_id: todayP.id, swimmer_id: sw, status: i === 5 ? 'late' : i === 7 ? 'out' : 'here',
+      parent_reported: i === 7, reason: i === 7 ? 'Dentist' : null, updated_by: USERS.coach.id }));
+  }
+
+  // Seed time faster than anything swum (Nora's 100 back)
+  const seed_times = [{ id: nid('seed'), team_id: TEAM, swimmer_id: 's-3', meet_id: 'm-4', distance: 100, stroke: 'BK', course: 'SCY', time_cs: 5980,
+    created_by: USERS.coach.id, created_at: daysAgo(17).toISOString() }];
+
+  const inboxParsed = { ...parseResultLines(linesFromText(INBOX_TEXT)), source: 'html' };
+  const results_inbox = [{
+    id: 'inbox-1', team_id: TEAM, source_url: 'https://www.pacswim.org/demo/turkey-time-trial-results.htm', kind: 'meet', status: 'pending',
+    meet_name: 'PASA Turkey Time Trial', meet_date: '2026-11-01', course: 'SCY', found_at: daysAgo(0).toISOString(),
+    payload: {
+      parsed: inboxParsed,
+      meet: { name: 'PASA Turkey Time Trial', meet_date: '2026-11-01', course: 'SCY' },
+      swims: [
+        { swimmer_id: 's-1', distance: 100, stroke: 'FR', time_cs: 5340, splits_cs: [1262, 1336, 1372, 1370], split_len: 25, status: 'ok', place: 1, age: 17, name_in_results: 'Quinn, Harper R' },
+        { swimmer_id: 's-6', distance: 100, stroke: 'FR', time_cs: 5912, splits_cs: null, split_len: null, status: 'ok', place: 2, age: 14, name_in_results: 'Marchetti, Sofia' },
+        { swimmer_id: 's-7', distance: 100, stroke: 'FR', time_cs: 4995, splits_cs: null, split_len: null, status: 'ok', place: 2, age: 17, name_in_results: 'Ward, Caleb' },
+        { swimmer_id: 's-2', distance: 100, stroke: 'BR', time_cs: 6085, splits_cs: null, split_len: null, status: 'ok', place: 1, age: 16, name_in_results: 'Castillo, Owen' },
+      ],
+      seeds: [{ swimmer_id: 's-1', distance: 100, stroke: 'FR', time_cs: 5295 }, { swimmer_id: 's-6', distance: 100, stroke: 'FR', time_cs: 5890 }],
+    },
+    summary: { ours: 5, swimmers: 4, swims: 4, seeds: 2, heldPeople: 1, heldNames: ['Fischer, Elijah M'], heldSwims: 0, unattached: 0, notOnRoster: 0 },
+  }];
+
   return {
+    seed_times, results_inbox,
     profiles: [
       { id: USERS.coach.id, full_name: 'Demo Coach' },
       { id: USERS.parent.id, full_name: 'Demo Parent' },
       { id: USERS.swimmer.id, full_name: 'Eli Fischer' },
     ],
-    teams: [{ id: TEAM, name: 'PASA', team_code: 'PASA', team_aliases: ['Palo Alto Stanford Aquatics'], created_by: USERS.coach.id }],
+    teams: [{ id: TEAM, name: 'PASA', team_code: 'PASA', team_aliases: ['Palo Alto Stanford Aquatics'], created_by: USERS.coach.id,
+      results_source_url: 'https://www.pacswim.org/demo/results', results_checked_at: daysAgo(0).toISOString() }],
     team_coaches: [{ team_id: TEAM, user_id: USERS.coach.id, role: 'head' }],
     groups, swimmers,
     guardians: [{ swimmer_id: 's-1', user_id: USERS.parent.id }, { swimmer_id: 's-6', user_id: USERS.parent.id }, { swimmer_id: 's-4', user_id: 'demo-other-parent' }],
@@ -173,7 +234,7 @@ function buildData() {
 // A tiny query engine with the same shape as the database client
 // ------------------------------------------------------------------
 const MANY_TO_ONE = { groups: 'group_id', teams: 'team_id', swimmers: 'swimmer_id', meets: 'meet_id', practices: 'practice_id' };
-const ONE_TO_MANY = { note_replies: 'note_id', results: 'meet_id' };
+const ONE_TO_MANY = { note_replies: 'note_id', results: 'meet_id', attendance: 'practice_id' };
 
 function parseEmbeds(select) {
   const embeds = [];
@@ -209,6 +270,7 @@ class Query {
   single() { this.single = 'one'; return this; }
   insert(rows) { this.mode = 'insert'; this.payload = Array.isArray(rows) ? rows : [rows]; return this; }
   update(vals) { this.mode = 'update'; this.payload = vals; return this; }
+  upsert(rows, opts = {}) { this.mode = 'upsert'; this.payload = Array.isArray(rows) ? rows : [rows]; this.conflict = (opts.onConflict || 'id').split(','); return this; }
   delete() { this.mode = 'delete'; return this; }
 
   withEmbeds(row) {
@@ -230,6 +292,13 @@ class Query {
       const made = this.payload.map((r) => ({ id: nid(this.table), created_at: new Date().toISOString(), ...this.defaults(), ...r }));
       rows.push(...made);
       return { data: this.returning ? made : null, error: null };
+    }
+    if (this.mode === 'upsert') {
+      for (const r of this.payload) {
+        const hit = rows.find((x) => this.conflict.every((c) => x[c] === r[c]));
+        if (hit) Object.assign(hit, r); else rows.push({ ...r });
+      }
+      return { data: null, error: null };
     }
     if (this.mode === 'update') {
       rows.filter((r) => this.filters.every((f) => f(r))).forEach((r) => Object.assign(r, this.payload));
@@ -325,6 +394,44 @@ export function createDemoClient() {
       db.data.results.filter((r) => r.meet_id === p_meet).forEach((r) => log('delete', r));
       db.data.results = db.data.results.filter((r) => r.meet_id !== p_meet);
       db.data.meets = db.data.meets.filter((m) => m.id !== p_meet);
+      return ok(null);
+    },
+    add_seed_times: ({ p_meet, p_seeds }) => {
+      const m = db.data.meets.find((x) => x.id === p_meet);
+      if (!m) return fail('Meet not found');
+      for (const sd of p_seeds) {
+        const hit = db.data.seed_times.find((x) => x.meet_id === p_meet && x.swimmer_id === sd.swimmer_id && x.distance === sd.distance && x.stroke === sd.stroke);
+        if (hit) hit.time_cs = sd.time_cs;
+        else db.data.seed_times.push({ id: nid('seed'), team_id: TEAM, meet_id: p_meet, course: m.course, created_by: USERS.coach.id, ...sd });
+      }
+      return ok(p_seeds.length);
+    },
+    mark_results_checked: () => { db.data.teams[0].results_checked_at = new Date().toISOString(); return ok(null); },
+    start_practice: ({ p_group, p_date, p_session }) => {
+      let p = db.data.practices.find((x) => x.group_id === p_group && x.practice_date === p_date && x.session === p_session);
+      if (!p) { p = { id: nid('p'), team_id: TEAM, group_id: p_group, practice_date: p_date, session: p_session }; db.data.practices.push(p); }
+      for (const sw of db.data.swimmers.filter((x) => x.group_id === p_group && !x.archived)) {
+        if (!db.data.attendance.some((a) => a.practice_id === p.id && a.swimmer_id === sw.id)) {
+          db.data.attendance.push({ practice_id: p.id, swimmer_id: sw.id, status: 'here', parent_reported: false, updated_by: USERS.coach.id });
+        }
+      }
+      return ok(p.id);
+    },
+    report_absence: ({ p_swimmer, p_date, p_session, p_reason }) => {
+      if (db.role !== 'parent') return fail('Only a parent or guardian can report an absence');
+      const sw = db.data.swimmers.find((x) => x.id === p_swimmer);
+      if (!sw || !sw.group_id) return fail('This swimmer isn\'t in a training group yet');
+      let p = db.data.practices.find((x) => x.group_id === sw.group_id && x.practice_date === p_date && x.session === p_session);
+      if (!p) { p = { id: nid('p'), team_id: TEAM, group_id: sw.group_id, practice_date: p_date, session: p_session }; db.data.practices.push(p); }
+      const a = db.data.attendance.find((x) => x.practice_id === p.id && x.swimmer_id === p_swimmer);
+      if (a && !a.parent_reported) return fail('The coach has already taken attendance for that practice');
+      if (a) Object.assign(a, { status: 'out', reason: p_reason });
+      else db.data.attendance.push({ practice_id: p.id, swimmer_id: p_swimmer, status: 'out', parent_reported: true, reason: p_reason, updated_by: USERS.parent.id });
+      return ok(null);
+    },
+    cancel_absence: ({ p_swimmer, p_date, p_session }) => {
+      const ids = db.data.practices.filter((x) => x.practice_date === p_date && x.session === p_session).map((x) => x.id);
+      db.data.attendance = db.data.attendance.filter((a) => !(a.swimmer_id === p_swimmer && a.parent_reported && ids.includes(a.practice_id)));
       return ok(null);
     },
     set_goal_splits: ({ p_goal, p_splits }) => {

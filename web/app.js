@@ -30,7 +30,10 @@ export async function loadRoles() {
   const uid = state.user.id;
   const [profile, coaches, guardians, self] = await Promise.all([
     db.from('profiles').select('id, full_name').eq('id', uid).maybeSingle(),
-    db.from('team_coaches').select('team_id, role, teams(name, team_code, team_aliases)').eq('user_id', uid),
+    db.from('team_coaches').select('team_id, role, teams(name, team_code, team_aliases, results_source_url, results_checked_at)').eq('user_id', uid)
+      .then((r) => (r.error && /results_/.test(r.error.message || '')
+        // database update 004 not run yet: load without the automatic-results columns
+        ? db.from('team_coaches').select('team_id, role, teams(name, team_code, team_aliases)').eq('user_id', uid) : r)),
     db.from('guardians').select('swimmer_id').eq('user_id', uid),
     db.from('swimmer_accounts').select('swimmer_id').eq('user_id', uid),
   ]);
@@ -157,7 +160,7 @@ function renderDemoChooser() {
       h('h1', { class: 'display' }, APP_NAME),
       h('p', { class: 'lead' }, 'Demo with a made-up PASA senior group. Nothing you do here is saved.')),
     h('div', { class: 'stack' },
-      pick('coach', 'See it as the coach', 'Roster, meet results, analytics and goal splits.'),
+      pick('coach', 'See it as the coach', 'Today\'s practice, notes, results to approve, analytics.'),
       pick('parent', 'See it as a parent', 'Two swimmers, coach notes, goals and best times.'),
       pick('swimmer', 'See it as a swimmer', 'A senior swimmer\'s own page and event analytics.')),
     configured ? h('a', { href: '#/login', class: 'back' }, '← Back to sign in') : null));
