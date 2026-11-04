@@ -26,7 +26,7 @@ async function loadSwimmer(me) {
 
   const monthStart = new Date();
   monthStart.setDate(1);
-  const [notes, goals, results, attendance, account] = await Promise.all([
+  const [notes, goals, results, attendance, account, parents] = await Promise.all([
     notesQuery,
     db.from('goals').select('id, kind, title, course, due_label, status, created_at, created_by, distance, stroke, target_cs')
       .eq('swimmer_id', me.id).eq('status', 'active').order('created_at', { ascending: false }),
@@ -34,6 +34,7 @@ async function loadSwimmer(me) {
     db.from('attendance').select('status, parent_reported, practices!inner(practice_date, session)').eq('swimmer_id', me.id)
       .gte('practices.practice_date', monthStart.toISOString().slice(0, 10)),
     db.from('swimmer_accounts').select('swimmer_id').eq('swimmer_id', me.id),
+    db.from('guardians').select('swimmer_id').eq('swimmer_id', me.id),
   ]);
   return {
     notes: must(notes) || [],
@@ -41,6 +42,7 @@ async function loadSwimmer(me) {
     results: must(results) || [],
     attendance: must(attendance) || [],
     hasOwnLogin: (must(account) || []).length > 0,
+    hasParent: (must(parents) || []).length > 0,
   };
 }
 
@@ -97,7 +99,11 @@ export async function renderSwimmerPage(id, mode, opts = {}) {
       header,
       timesSection(me, data.results, mode, refresh),
       goalsSection(me, data.goals, refresh),
-      notesSection(me, data.notes, mode, refresh),
+      mode === 'family' && role === 'self' && !data.hasParent
+        ? h('section', { class: 'card empty' },
+            h('div', { class: 'card-head' }, h('h2', {}, "Coach's notes"), h('span', { class: 'pill' }, 'Locked')),
+            h('p', { class: 'muted' }, 'Coach notes and messages turn on once a parent or guardian joins — every message goes to you and your parents together. Ask a parent to join with the parent code from your coach.'))
+        : notesSection(me, data.notes, mode, refresh),
       attendanceSection(me, data.attendance, role),
       mode === 'family' && role === 'guardian' ? swimmerLoginSection(me, data.hasOwnLogin) : null));
 }

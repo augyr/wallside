@@ -59,19 +59,40 @@ export function renderCoachSetup() {
 // Coach home: roster + invites
 // ------------------------------------------------------------------
 async function loadTeam(teamId) {
-  const [groups, swimmers, guardians, invites] = await Promise.all([
+  const [groups, swimmers, guardians, accounts, invites] = await Promise.all([
     db.from('groups').select('id, name, sort').eq('team_id', teamId).order('sort'),
     db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, group_id, archived').eq('team_id', teamId).eq('archived', false).order('last_name'),
     db.from('guardians').select('swimmer_id, user_id'),
-    db.from('invites').select('code, swimmer_id, uses_left, expires_at').eq('kind', 'guardian').eq('revoked', false),
+    db.from('swimmer_accounts').select('swimmer_id'),
+    db.from('invites').select('code, swimmer_id, kind, uses_left, expires_at').eq('revoked', false),
   ]);
   const swimmerList = must(swimmers) || [];
   const ids = new Set(swimmerList.map((s) => s.id));
   const joined = {};
   for (const g of must(guardians) || []) if (ids.has(g.swimmer_id)) joined[g.swimmer_id] = (joined[g.swimmer_id] || 0) + 1;
+  const selfJoined = {};
+  for (const a of must(accounts) || []) if (ids.has(a.swimmer_id)) selfJoined[a.swimmer_id] = true;
   const codes = {};
-  for (const i of must(invites) || []) if (ids.has(i.swimmer_id) && new Date(i.expires_at) > new Date()) codes[i.swimmer_id] = i;
-  return { groups: must(groups) || [], swimmers: swimmerList, joined, codes };
+  const swimmerCodes = {};
+  for (const i of must(invites) || []) {
+    if (!ids.has(i.swimmer_id) || new Date(i.expires_at) <= new Date() || i.uses_left <= 0) continue;
+    if (i.kind === 'swimmer') swimmerCodes[i.swimmer_id] = i; else codes[i.swimmer_id] = i;
+  }
+  return { groups: must(groups) || [], swimmers: swimmerList, joined, selfJoined, codes, swimmerCodes };
+}
+
+// Who has signed in for a swimmer: the swimmer themself and/or parents
+function joinStatus(s, data) {
+  const parents = data.joined[s.id] || 0;
+  const self = !!data.selfJoined[s.id];
+  if (self && parents) return { text: `Swimmer & ${parents} parent${parents > 1 ? 's' : ''} joined`, cls: 'ok', pill: 'All set' };
+  if (self) return { text: 'Swimmer joined · messages locked until a parent joins', cls: 'warn', pill: 'Swimmer joined' };
+  if (parents) return { text: `${parents} parent${parents > 1 ? 's' : ''} joined`, cls: 'ok', pill: 'Parent joined' };
+  return { text: 'No one has signed in yet', cls: '', pill: 'Not signed in' };
+}
+
+export function canHaveOwnLogin(s) {
+  return !!s.birth_year && new Date().getFullYear() - s.birth_year >= 13;
 }
 
 export function coachTeam() {
@@ -124,9 +145,9 @@ async function renderRosterOrInvites(tab) {
     toast(err.message || String(err), 'error');
     return;
   }
-  const joinedCount = data.swimmers.filter((s) => data.joined[s.id]).length;
+  const joinedCount = data.swimmers.filter((s) => data.joined[s.id] || data.selfJoined[s.id]).length;
   mount(coachChrome(tab,
-      `${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'} · ${joinedCount} ${joinedCount === 1 ? 'family' : 'families'} joined`),
+      `${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'} on the team · ${joinedCount} signed in`),
     h('main', { class: 'page' }, tab === 'invites' ? invitesView(teamId, data) : rosterView(teamId, data)));
 }
 
@@ -164,9 +185,7 @@ function groupSection(name, swimmers, data) {
               h('strong', {}, `${s.first_name} ${s.last_name}`),
               h('span', { class: 'muted small block' },
                 s.birth_year ? `Born ${s.birth_year}${s.birth_year_estimated ? ' (estimated)' : ''}` : 'Birth year not set')),
-            data.joined[s.id]
-              ? h('span', { class: 'pill ok' }, `${data.joined[s.id]} joined`)
-              : h('span', { class: 'pill' }, 'Not joined')))))
+            (() => { const st = joinStatus(s, data); return h('span', { class: 'pill ' + st.cls }, st.pill); })()))))
       : h('p', { class: 'muted' }, 'No swimmers in this group yet.'));
 }
 
@@ -274,47 +293,80 @@ async function copy(text) {
   }
 }
 
-function invitesView(teamId, data) {
-  const missing = data.swimmers.filter((s) => !data.codes[s.id]).length;
+function swimmerInviteMessage(swimmer, code) {
+  return `Hi ${swimmer.first_name} — here's your own ${APP_NAME} login for your swim times, goals and progress.\n\n` +
+    `Open: ${inviteLink(code)}\nOr enter code ${code}\n\nThis code is just for you and works once. ` +
+    `Coach notes and messages turn on once a parent or guardian joins too.`;
+}
 
-  const makeAll = h('button', { type: 'button', class: 'btn primary', onClick: async () => {
-    await busy(makeAll, async () => {
-      const n = must(await db.rpc('create_missing_invites', { p_team: teamId }));
-      toast(`${n} codes created`, 'success');
+function invitesView(teamId, data) {
+  const eligible = data.swimmers.filter(canHaveOwnLogin);
+  const missingSwimmer = eligible.filter((s) => !data.selfJoined[s.id] && !data.swimmerCodes[s.id]).length;
+  const missingParent = data.swimmers.filter((s) => !data.codes[s.id]).length;
+  const noYear = data.swimmers.filter((s) => !s.birth_year).length;
+
+  const makeSwimmerCodes = h('button', { type: 'button', class: 'btn primary', onClick: async () => {
+    await busy(makeSwimmerCodes, async () => {
+      const n = must(await db.rpc('create_missing_swimmer_invites', { p_team: teamId }));
+      toast(`${n} swimmer codes created`, 'success');
       renderCoach('invites');
     });
-  } }, `Create codes for ${missing} swimmer${missing === 1 ? '' : 's'}`);
+  } }, `Create swimmer codes for ${missingSwimmer}`);
+  const makeParentCodes = h('button', { type: 'button', class: 'btn', onClick: async () => {
+    await busy(makeParentCodes, async () => {
+      const n = must(await db.rpc('create_missing_invites', { p_team: teamId }));
+      toast(`${n} parent codes created`, 'success');
+      renderCoach('invites');
+    });
+  } }, `Create parent codes for ${missingParent}`);
 
-  const notJoined = data.swimmers.filter((s) => data.codes[s.id] && !data.joined[s.id]);
-  const copyAll = h('button', { type: 'button', class: 'btn', onClick: () => copy(
-    notJoined.map((s) => `${s.first_name} ${s.last_name}: ${data.codes[s.id].code}  ${inviteLink(data.codes[s.id].code)}`).join('\n')) },
-    `Copy all ${notJoined.length} unclaimed codes`);
+  const unclaimedSwimmer = data.swimmers.filter((s) => data.swimmerCodes[s.id] && !data.selfJoined[s.id]);
+  const unclaimedParent = data.swimmers.filter((s) => data.codes[s.id] && !data.joined[s.id]);
+  const copyList = (list, key, label) => h('button', { type: 'button', class: 'btn small', onClick: () => copy(
+    list.map((s) => `${s.first_name} ${s.last_name}: ${data[key][s.id].code}  ${inviteLink(data[key][s.id].code)}`).join('\n')) },
+    `Copy ${list.length} ${label}`);
 
   return [
     h('section', { class: 'card stack' },
-      h('h2', {}, 'Invite families'),
-      h('p', { class: 'muted' }, 'Each swimmer gets a private code. Up to 2 parents can use it, and they will only ever see their own swimmer. Swimmers 13+ get their own login later, invited by a parent.'),
-      missing ? makeAll : h('p', { class: 'notice' }, 'Every swimmer has a code.'),
-      notJoined.length ? copyAll : null),
+      h('h2', {}, 'Invite swimmers and families'),
+      h('p', { class: 'muted' }, 'Swimmers 13 and older can sign in first with their own code. Coach notes and messages stay locked for a swimmer until a parent or guardian joins with the parent code. Each code only ever shows that one swimmer.'),
+      noYear ? h('a', { href: '#/coach/birthyears', class: 'notice-link' }, `${noYear} swimmer${noYear === 1 ? ' has' : 's have'} no birth year — needed for a swimmer code →`) : null,
+      h('div', { class: 'row' },
+        missingSwimmer ? makeSwimmerCodes : null,
+        missingParent ? makeParentCodes : null),
+      !missingSwimmer && !missingParent ? h('p', { class: 'notice' }, 'Every swimmer has their codes.') : null,
+      h('div', { class: 'row' },
+        unclaimedSwimmer.length ? copyList(unclaimedSwimmer, 'swimmerCodes', 'unclaimed swimmer codes') : null,
+        unclaimedParent.length ? copyList(unclaimedParent, 'codes', 'unclaimed parent codes') : null)),
     data.swimmers.length ? h('section', { class: 'card' },
       h('ul', { class: 'list' }, data.swimmers.map((s) => {
-        const inv = data.codes[s.id];
-        const renew = h('button', { type: 'button', class: 'btn small ghost', onClick: async () => {
-          if (inv && !confirm(`Replace ${s.first_name}'s code? The old code will stop working.`)) return;
-          await busy(renew, async () => {
-            must(await db.rpc('create_invite', { p_swimmer: s.id, p_kind: 'guardian' }));
-            renderCoach('invites');
-          });
-        } }, inv ? 'New code' : 'Create code');
-        return h('li', { class: 'list-row wrap' },
-          h('span', { class: 'grow' },
+        const st = joinStatus(s, data);
+        const sInv = data.swimmerCodes[s.id];
+        const pInv = data.codes[s.id];
+        const renew = (kind, existing) => {
+          const b = h('button', { type: 'button', class: 'btn small ghost', onClick: async () => {
+            if (existing && !confirm(`Replace ${s.first_name}'s ${kind === 'swimmer' ? 'swimmer' : 'parent'} code? The old code will stop working.`)) return;
+            await busy(b, async () => {
+              must(await db.rpc('create_invite', { p_swimmer: s.id, p_kind: kind }));
+              renderCoach('invites');
+            });
+          } }, existing ? 'New code' : 'Create code');
+          return b;
+        };
+        const codeLine = (label, inv, kind, msg, done) => h('div', { class: 'code-line' },
+          h('span', { class: 'small muted code-label' }, label),
+          done ? h('span', { class: 'small ok-text' }, 'Joined')
+            : inv ? h('code', { class: 'code' }, inv.code) : h('span', { class: 'small muted' }, '—'),
+          !done && inv ? h('button', { type: 'button', class: 'btn small', onClick: () => copy(msg(s, inv.code)) }, 'Copy') : null,
+          !done ? renew(kind, inv) : null);
+        return h('li', { class: 'stack tight' },
+          h('div', {},
             h('strong', {}, `${s.first_name} ${s.last_name}`),
-            h('span', { class: 'block small ' + (data.joined[s.id] ? 'ok-text' : 'muted') },
-              data.joined[s.id] ? `${data.joined[s.id]} parent${data.joined[s.id] > 1 ? 's' : ''} joined` : 'Not joined yet')),
-          inv ? h('code', { class: 'code' }, inv.code) : null,
-          h('span', { class: 'row' },
-            inv ? h('button', { type: 'button', class: 'btn small', onClick: () => copy(inviteMessage(s, inv.code)) }, 'Copy invite') : null,
-            renew));
+            h('span', { class: 'block small ' + (st.cls === 'ok' ? 'ok-text' : st.cls === 'warn' ? 'warn-text' : 'muted') }, st.text)),
+          canHaveOwnLogin(s)
+            ? codeLine('Swimmer', sInv, 'swimmer', swimmerInviteMessage, data.selfJoined[s.id])
+            : h('p', { class: 'small muted' }, s.birth_year ? 'Under 13 — uses a parent\'s account' : 'Add a birth year to create a swimmer code'),
+          codeLine('Parent', pInv, 'guardian', inviteMessage, false));
       }))) : h('section', { class: 'card empty' }, h('p', { class: 'muted' }, 'Add swimmers on the Roster tab first.')),
   ];
 }

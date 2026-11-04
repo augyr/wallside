@@ -195,3 +195,5 @@ table.splits td { font-family: ui-monospace, Menlo, monospace; }
 .split-inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
 .split-inputs label { display: flex; flex-direction: column; gap: 4px; }
 .split-inputs input.time-input { width: 100%; }
+.code-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.code-label { width: 60px; }

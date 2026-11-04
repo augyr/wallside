@@ -274,6 +274,17 @@ export function createDemoClient() {
   const rpcs = {
     create_invite: ({ p_swimmer }) => ok(`${(db.data.swimmers.find((s) => s.id === p_swimmer) || { first_name: 'SWIM' }).first_name.slice(0, 4).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`),
     create_missing_invites: () => ok(0),
+    create_missing_swimmer_invites: () => {
+      let n = 0;
+      for (const sw of db.data.swimmers) {
+        if (!sw.birth_year || new Date().getFullYear() - sw.birth_year < 13) continue;
+        if (db.data.swimmer_accounts.some((a) => a.swimmer_id === sw.id)) continue;
+        if (db.data.invites.some((i) => i.swimmer_id === sw.id && i.kind === 'swimmer')) continue;
+        db.data.invites.push({ code: `${sw.first_name.slice(0, 4).toUpperCase()}-SWIM`, swimmer_id: sw.id, kind: 'swimmer', uses_left: 1, expires_at: '2099-01-01', revoked: false });
+        n++;
+      }
+      return ok(n);
+    },
     preview_invite: () => ok([]),
     claim_invite: () => fail('Invite codes don\'t work in the demo.'),
     create_team: () => fail('The demo already has a team.'),
