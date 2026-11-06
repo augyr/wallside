@@ -81,8 +81,11 @@ export async function readResultsFromUrl(url) {
 // ------------------------------------------------------------------
 export async function loadRosterAndBests(teamId) {
   const [roster, results, seeds] = await Promise.all([
-    db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, also_known_as, usually_unattached, archived')
-      .eq('team_id', teamId).then(must),
+    db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, also_known_as, usually_unattached, archived, gender')
+      .eq('team_id', teamId)
+      .then((r) => (r.error && /gender/.test(r.error.message || '')
+        ? db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated, also_known_as, usually_unattached, archived').eq('team_id', teamId)
+        : r)).then(must),
     db.from('results').select('swimmer_id, distance, stroke, course, time_cs, status').eq('team_id', teamId).then(must),
     db.from('seed_times').select('swimmer_id, distance, stroke, course, time_cs').eq('team_id', teamId)
       .then((r) => (r.error ? [] : r.data || [])),
@@ -135,7 +138,7 @@ export function autoReview(parsed, roster, bests, team) {
       if (s.status !== 'dq' && !s.timeCs) continue;
       swims.push({ swimmer_id: p.swimmerId, distance: s.distance, stroke: s.stroke, time_cs: s.timeCs || null,
         splits_cs: s.splits, split_len: s.splitLen, status: s.status === 'dq' ? 'dq' : 'ok', dq_reason: s.dqReason,
-        place: s.place, age: s.age, name_in_results: p.name });
+        place: s.place, age: s.age, name_in_results: p.name, gender: s.gender || null });
     }
   }
   const seeds = seedsFor(groups.matched, bests[course] || {}).map(({ swimmer_id, distance, stroke, time_cs }) => ({ swimmer_id, distance, stroke, time_cs }));

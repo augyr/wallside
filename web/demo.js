@@ -83,6 +83,7 @@ function buildData() {
     id: `s-${i + 1}`, team_id: TEAM, group_id: g, first_name: first, last_name: last, birth_year: by,
     birth_year_estimated: i === 5, archived: false, also_known_as: i === 6 ? ['Calvin'] : [],
     usually_unattached: false, analytics_level: null, created_at: daysAgo(90).toISOString(),
+    gender: ['Owen', 'Eli', 'Caleb', 'Lucas'].includes(first) ? 'M' : 'F',
   }));
 
   const meets = [
@@ -259,6 +260,8 @@ class Query {
   in(c, vs) { this.filters.push((r) => vs.includes(getPath(r, c))); return this; }
   gte(c, v) { this.filters.push((r) => { const x = getPath(r, c); return x !== undefined && x >= v; }); return this; }
   lte(c, v) { this.filters.push((r) => { const x = getPath(r, c); return x !== undefined && x <= v; }); return this; }
+  lt(c, v) { this.filters.push((r) => { const x = getPath(r, c); return x !== undefined && x < v; }); return this; }
+  gt(c, v) { this.filters.push((r) => { const x = getPath(r, c); return x !== undefined && x > v; }); return this; }
   or(expr) {
     const parts = expr.split(',').map((p) => { const [c, op, ...rest] = p.split('.'); return { c, op, v: rest.join('.') }; });
     this.filters.push((r) => parts.some(({ c, op, v }) => op === 'eq' && String(r[c]) === v));
@@ -458,3 +461,14 @@ export function createDemoClient() {
     currentUser: () => USERS[db.role],
   };
 }
+
+// Made-up cuts for the demo only — clearly labeled samples, not real standards.
+const sample = (level, short, girls, boys) => ({
+  id: 'demo-' + short, level, name: short + ' (demo sample)', short, course: 'SCY', season: 'demo', source: 'made up for the demo',
+  entries: [{ gender: 'F', ageMin: null, ageMax: null, times: girls }, { gender: 'M', ageMin: null, ageMax: null, times: boys }],
+});
+export const DEMO_STANDARDS = [
+  sample('SECT', 'Sample cut 1', { '100-FR': 5550, '200-FR': 12090, '100-BK': 6150, '100-FL': 6150 }, { '100-FR': 4990, '200-FR': 11090, '100-FL': 5550 }),
+  sample('FUT', 'Sample cut 2', { '100-FR': 5420, '200-FR': 11790, '100-BK': 5990, '100-FL': 6000 }, { '100-FR': 4850, '200-FR': 10790, '100-FL': 5390 }),
+  sample('WJ', 'Sample cut 3', { '100-FR': 5249, '200-FR': 11450, '100-BK': 5799, '100-FL': 5850 }, { '100-FR': 4690, '200-FR': 10450, '100-FL': 5190 }),
+];

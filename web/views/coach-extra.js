@@ -1,6 +1,6 @@
 // Coach screens: edit a swimmer, team settings (team code, groups), bulk birth years.
 import { db, loadRoles } from '../app.js';
-import { h, mount, must, toast, busy, field, backLink, timeAgo } from '../ui.js';
+import { h, mount, must, toast, busy, field, backLink, timeAgo, withColumns } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { LEVELS, LEVEL_LABEL, analyticsLevel } from '../lib/levels.js';
 
@@ -33,6 +33,9 @@ export async function renderSwimmerEdit(id) {
     (groups || []).map((g) => h('option', { value: g.id, selected: g.id === s.group_id ? true : null }, g.name)));
   const aka = h('input', { type: 'text', maxlength: 200, value: (s.also_known_as || []).join(', '), placeholder: 'e.g. Theodore, Ted' });
   const unattached = h('input', { type: 'checkbox', checked: s.usually_unattached ? true : null });
+  const hasGender = 'gender' in s;   // false until database update 005 is run
+  const gender = h('select', {}, [['', 'Not set'], ['F', 'Girls'], ['M', 'Boys']]
+    .map(([v, t]) => h('option', { value: v, selected: (s.gender || '') === v ? true : null }, t)));
   const auto = analyticsLevel({ birth_year: s.birth_year }, s.groups);
   const level = levelSelect(s.analytics_level, `Automatic (${LEVEL_LABEL[auto.level]})`);
 
@@ -47,6 +50,7 @@ export async function renderSwimmerEdit(id) {
         also_known_as: aka.value.split(',').map((x) => x.trim()).filter(Boolean).slice(0, 8),
         usually_unattached: unattached.checked,
         analytics_level: level.value || null,
+        ...(hasGender ? { gender: gender.value || null } : {}),
       }).eq('id', s.id));
       toast('Saved', 'success');
       location.hash = `/coach/s/${s.id}`;
@@ -54,6 +58,7 @@ export async function renderSwimmerEdit(id) {
   } },
     h('div', { class: 'grid2' }, field('First name', first), field('Last name', last)),
     h('div', { class: 'grid2' }, field('Birth year', year), field('Group', group)),
+    hasGender ? field('Girls or boys', gender, 'Used for time standards. Fills in automatically from meet results.') : null,
     h('label', { class: 'check' }, estimated, h('span', {}, 'Birth year is an estimate (e.g. worked out from a meet age)')),
     field('Also listed in results as', aka, 'Other first names this swimmer appears under in meet results, separated by commas. Used to match results automatically.'),
     h('label', { class: 'check' }, unattached, h('span', {}, 'Usually swims unattached (UN) — include their unattached swims automatically')),
@@ -180,8 +185,8 @@ export async function renderBirthYears() {
   mount(coachChrome('roster'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
   let swimmers;
   try {
-    swimmers = must(await db.from('swimmers').select('id, first_name, last_name, birth_year, birth_year_estimated')
-      .eq('team_id', team.id).eq('archived', false).order('last_name'));
+    swimmers = must(await withColumns((c) => db.from('swimmers').select(c).eq('team_id', team.id).eq('archived', false).order('last_name'),
+      'id, first_name, last_name, birth_year, birth_year_estimated, gender', 'id, first_name, last_name, birth_year, birth_year_estimated'));
   } catch (err) { toast(err.message, 'error'); return; }
 
   const rows = swimmers.map((s) => ({
@@ -190,33 +195,40 @@ export async function renderBirthYears() {
       'aria-label': `${s.first_name} ${s.last_name} birth year` }),
     est: h('input', { type: 'checkbox', checked: s.birth_year_estimated ? true : null,
       'aria-label': `${s.first_name}'s birth year is estimated` }),
+    gender: 'gender' in s ? h('select', { 'aria-label': `${s.first_name} ${s.last_name}: girls or boys` },
+      [['', '—'], ['F', 'G'], ['M', 'B']].map(([v, t]) => h('option', { value: v, selected: (s.gender || '') === v ? true : null }, t))) : null,
   }));
+  const hasGender = rows.some((r) => r.gender);
 
   const save = h('button', { type: 'button', class: 'btn primary', onClick: async () => {
     await busy(save, async () => {
-      const changed = rows.filter(({ s, year, est }) =>
-        (year.value ? Number(year.value) : null) !== (s.birth_year || null) || est.checked !== !!s.birth_year_estimated);
-      for (const { s, year, est } of changed) {
+      const changed = rows.filter(({ s, year, est, gender }) =>
+        (year.value ? Number(year.value) : null) !== (s.birth_year || null) || est.checked !== !!s.birth_year_estimated
+        || (gender && (gender.value || null) !== (s.gender || null)));
+      for (const { s, year, est, gender } of changed) {
         must(await db.from('swimmers').update({
           birth_year: year.value ? Number(year.value) : null,
           birth_year_estimated: year.value ? est.checked : false,
+          ...(gender ? { gender: gender.value || null } : {}),
         }).eq('id', s.id));
       }
       toast(changed.length ? `${changed.length} updated` : 'No changes', 'success');
       location.hash = '/coach';
     });
-  } }, 'Save birth years');
+  } }, hasGender ? 'Save' : 'Save birth years');
 
   const sorted = [...rows].sort((a, b) => (!!a.s.birth_year && !a.s.birth_year_estimated) - (!!b.s.birth_year && !b.s.birth_year_estimated));
   mount(coachChrome('roster'), h('main', { class: 'page' },
     backLink('#/coach', 'Roster'),
-    h('h1', {}, 'Birth years'),
-    h('p', { class: 'muted' }, 'Missing and estimated years are listed first. Untick "estimated" once a year is confirmed.'),
+    h('h1', {}, hasGender ? 'Birth years and girls/boys' : 'Birth years'),
+    h('p', { class: 'muted' }, 'Missing and estimated years are listed first. Untick "estimated" once a year is confirmed.'
+      + (hasGender ? ' G/B is used for time standards and fills in from meet results.' : '')),
     h('section', { class: 'card' },
-      h('div', { class: 'year-grid' },
+      h('div', { class: 'year-grid' + (hasGender ? ' with-gender' : '') },
         h('span', { class: 'small muted' }, 'Swimmer'), h('span', { class: 'small muted' }, 'Birth year'), h('span', { class: 'small muted' }, 'Est.'),
-        sorted.map(({ s, year, est }) => [
-          h('span', { class: 'year-name' }, `${s.first_name} ${s.last_name}`), year, est,
+        hasGender ? h('span', { class: 'small muted' }, 'G/B') : null,
+        sorted.map(({ s, year, est, gender }) => [
+          h('span', { class: 'year-name' }, `${s.first_name} ${s.last_name}`), year, est, gender,
         ]))),
     save));
 }

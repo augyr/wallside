@@ -1,8 +1,9 @@
 // Event analytics: best vs most recent vs goal splits, progress chart, swim history.
 import { db, state, topBar } from '../app.js';
-import { h, mount, must, toast, busy, field, formatTime, formatDiff, parseTime, eventName, formatDate, backLink } from '../ui.js';
+import { h, mount, must, toast, busy, field, formatTime, formatDiff, parseTime, eventName, formatDate, backLink, withColumns } from '../ui.js';
 import { COURSE_LABEL, lapLength } from '../lib/time.js';
 import { goalSplits, halves } from '../lib/goalsplits.js';
+import { cutStatus, ageForStandards, cutLabel } from '../lib/standards.js';
 import { analyticsLevel, LEVEL_LABEL, seasonStartYear } from '../lib/levels.js';
 import { swimmerHref } from './swimmer.js';
 
@@ -32,7 +33,9 @@ export async function renderEvent(swimmerId, key, mode) {
   let me; let results; let goals; let seeds;
   try {
     [me, results, goals, seeds] = await Promise.all([
-      db.from('swimmers').select('id, first_name, last_name, birth_year, analytics_level, groups(name, analytics_level)').eq('id', swimmerId).maybeSingle().then(must),
+      withColumns((c) => db.from('swimmers').select(c).eq('id', swimmerId).maybeSingle(),
+        'id, first_name, last_name, birth_year, analytics_level, gender, groups(name, analytics_level)',
+        'id, first_name, last_name, birth_year, analytics_level, groups(name, analytics_level)').then(must),
       db.from('results').select('id, time_cs, splits_cs, split_len, status, dq_reason, place, meet_name, meet_date, created_at')
         .eq('swimmer_id', swimmerId).eq('distance', distance).eq('stroke', stroke).eq('course', course)
         .order('meet_date', { ascending: true }).then(must),
@@ -61,6 +64,8 @@ export async function renderEvent(swimmerId, key, mode) {
   const seasonChange = season.length > 1 ? seasonBest.time_cs - season[0].time_cs : null;
 
   const title = `${eventName(distance, stroke)}`;
+  const cutEvent = { distance, stroke, course, gender: me.gender, age: ageForStandards({ birthYear: me.birth_year }) };
+  const cuts = cutStatus(bestCs, cutEvent);
   mount(chrome, h('main', { class: 'page' },
     backLink(back, mode === 'coach' ? `${me.first_name} ${me.last_name}` : `${me.first_name}'s page`),
     h('div', { class: 'stack tight' },
@@ -76,10 +81,14 @@ export async function renderEvent(swimmerId, key, mode) {
           : (seasonChange !== null ? 'first swim → best' : 'one swim so far'),
         goal ? 'goal' : (seasonChange !== null && seasonChange < 0 ? 'good' : ''))) : null,
 
-    ok.length >= 2 ? chartCard(ok, goal) : null,
+    cuts.met || cuts.next ? h('section', { class: 'card cut-strip' },
+      cuts.met ? h('span', {}, h('span', { class: 'cut-badge' }, cutLabel(cuts.met.set)), h('span', { class: 'small muted' }, ` ${cuts.met.set.name} · ${formatTime(cuts.met.cs)}`)) : null,
+      cuts.next ? h('span', { class: 'small' }, h('strong', {}, `${formatTime(cuts.next.gap)} to ${cutLabel(cuts.next.set)}`),
+        h('span', { class: 'muted' }, ` (${formatTime(cuts.next.cs)})`)) : h('span', { class: 'small ok-text' }, 'Fastest cut on file ✓')) : null,
+    ok.length >= 2 ? chartCard(ok, goal, [cuts.met, cuts.next].filter(Boolean)) : null,
     seedBest ? h('p', { class: 'muted small' }, `Best time ${formatTime(seedBest.time_cs)} is a seed time${seedBest.meets && seedBest.meets.name ? ` (entered at ${seedBest.meets.name})` : ''} — no splits, so the split table uses the best swim on file.`) : null,
     splitsCard({ me, best, latest, goal, distance, stroke, course, level: level.level, mode, refresh }),
-    goal ? null : setGoalCard(me, distance, stroke, course, best, refresh),
+    goal ? null : setGoalCard(me, distance, stroke, course, best, refresh, cuts),
     historyCard(results || []),
     level.level === 'senior' ? h('section', { class: 'card empty' },
       h('div', { class: 'card-head' }, h('h2', {}, 'Stroke efficiency'), h('span', { class: 'pill' }, 'Coming later')),
@@ -94,9 +103,9 @@ function tile(label, value, sub, tone) {
 }
 
 // ------------------------------------------------------------------
-function chartCard(swims, goal) {
+function chartCard(swims, goal, cutLines = []) {
   const W = 340; const H = 170; const L = 46; const R = 12; const T = 14; const B = 30;
-  const times = swims.map((r) => r.time_cs).concat(goal ? [goal.target_cs] : []);
+  const times = swims.map((r) => r.time_cs).concat(goal ? [goal.target_cs] : [], cutLines.map((c) => c.cs));
   let lo = Math.min(...times); let hi = Math.max(...times);
   const pad = Math.max(20, (hi - lo) * 0.15); lo -= pad; hi += pad;
   const x = (i) => L + (swims.length === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (swims.length - 1));
@@ -112,6 +121,8 @@ function chartCard(swims, goal) {
     s('text', { x: L - 6, y: H - B + 4, 'text-anchor': 'end', class: 'axis' }, formatTime(hi)),
     goal ? s('line', { x1: L, x2: W - R, y1: y(goal.target_cs), y2: y(goal.target_cs), class: 'goal-line' }) : null,
     goal ? s('text', { x: W - R, y: y(goal.target_cs) - 5, 'text-anchor': 'end', class: 'goal-label' }, 'Goal ' + formatTime(goal.target_cs)) : null,
+    ...cutLines.flatMap((c) => [s('line', { x1: L, x2: W - R, y1: y(c.cs), y2: y(c.cs), class: 'cut-line' }),
+      s('text', { x: L + 4, y: y(c.cs) - 4, class: 'cut-label' }, `${cutLabel(c.set)} ${formatTime(c.cs)}`)]),
     s('polyline', { points: pts, class: 'trend' }),
     swims.map((r, i) => s('circle', { cx: x(i), cy: y(r.time_cs), r: i === swims.length - 1 ? 5 : 4, class: 'dot' },
       s('title', {}, `${formatTime(r.time_cs)} · ${r.meet_name || ''} ${formatDate(r.meet_date)}`))),
@@ -227,7 +238,7 @@ function goalEditor(goal, goalInfo, laps, lapLen, refresh) {
       h('div', { class: 'row' }, save, reset)));
 }
 
-function setGoalCard(me, distance, stroke, course, best, refresh) {
+function setGoalCard(me, distance, stroke, course, best, refresh, cuts) {
   const target = h('input', { type: 'text', inputmode: 'decimal', class: 'time-input',
     placeholder: best ? formatTime(Math.round(best.time_cs * 0.985)) : 'e.g. 59.00' });
   const form = h('form', { class: 'row', onSubmit: async (e) => {
@@ -243,9 +254,12 @@ function setGoalCard(me, distance, stroke, course, best, refresh) {
       refresh();
     });
   } }, field('Goal time', target), h('button', { type: 'submit', class: 'btn small primary' }, 'Set goal'));
+  const upcoming = cuts && cuts.next ? cuts.all.filter((c) => c.cs <= cuts.next.cs).slice(0, 3) : [];
   return h('section', { class: 'card stack' },
     h('h2', {}, 'Goal'),
     h('p', { class: 'muted' }, `No goal time for the ${eventName(distance, stroke)} yet. Set one to see suggested goal splits.`),
+    upcoming.length ? h('div', { class: 'chips' }, upcoming.map((c) => h('button', { type: 'button', class: 'chip small',
+      onClick: () => { target.value = formatTime(c.cs); target.focus(); } }, `${cutLabel(c.set)} · ${formatTime(c.cs)}`))) : null,
     form);
 }
 

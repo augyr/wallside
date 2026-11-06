@@ -1,10 +1,11 @@
 // Coach: meet results — list, upload a results file, review, publish, and fix afterwards.
 import { db, state } from '../app.js';
-import { h, mount, must, toast, busy, field, backLink, formatTime, parseTime, eventName, formatDate } from '../ui.js';
+import { h, mount, must, toast, busy, field, backLink, formatTime, parseTime, eventName, formatDate, withColumns } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { teamCodeCard } from './coach-extra.js';
 import { buildReview, estimateBirthYear, autoSkipped } from '../lib/matcher.js';
 import { COURSE_LABEL } from '../lib/time.js';
+import { standardSets, newCuts, ageForStandards, cutLabel, LADDER } from '../lib/standards.js';
 import { readResults, readResultsFromUrl, loadRosterAndBests, seedsFor, approveInboxItem, dismissInboxItem } from './results-auto.js';
 
 // ------------------------------------------------------------------
@@ -368,7 +369,7 @@ function publishCard(meet, groups, rosterById, parsed, seedState, opts) {
         swims.push({
           swimmer_id: p.finalId, distance: s.distance, stroke: s.stroke, time_cs: s.editTime || null,
           splits_cs: timeChanged ? null : s.splits, split_len: timeChanged ? null : s.splitLen,
-          status: s.status === 'dq' ? 'dq' : 'ok', dq_reason: s.dqReason, place: s.place, age: s.age, name_in_results: p.name,
+          status: s.status === 'dq' ? 'dq' : 'ok', dq_reason: s.dqReason, place: s.place, age: s.age, name_in_results: p.name, gender: s.gender || null,
         });
       }
       if (!swims.length) throw new Error('Nothing selected to publish.');
@@ -381,6 +382,7 @@ function publishCard(meet, groups, rosterById, parsed, seedState, opts) {
           .find((m) => m.name.trim().toLowerCase() === meet.name.trim().toLowerCase());
         if (!earlier) throw new Error('Couldn\'t find the earlier upload — choose “Replace”.');
         const n = seeds.length ? must(await db.rpc('add_seed_times', { p_meet: earlier.id, p_seeds: seeds })) : 0;
+        await fillGenders(chosenPeople(groups), rosterById);
         if (opts.inboxItem) await approveDone(opts.inboxItem, earlier.id);
         toast(n ? `${n} seed time${n === 1 ? '' : 's'} added` : 'No new seed times — everything is already on file', 'success');
         location.hash = `/coach/results/${earlier.id}`;
@@ -427,6 +429,18 @@ function publishCard(meet, groups, rosterById, parsed, seedState, opts) {
     });
   }
   return h('section', { class: 'card stack sticky-bottom' }, againBox, msg, btn);
+}
+
+// Girls/boys from the results fills in a swimmer's gender when it isn't set (time standards need it)
+async function fillGenders(people, rosterById) {
+  const done = new Set();
+  for (const p of people) {
+    const id = p.swimmerId || (p.choice && p.choice !== 'new' && p.choice !== 'skip' ? p.choice : null);
+    const g = (p.swims.find((x) => x.gender) || {}).gender;
+    if (!id || !g || done.has(id) || !rosterById[id] || rosterById[id].gender) continue;
+    done.add(id);
+    await db.from('swimmers').update({ gender: g }).eq('id', id);   // ignored if update 005 isn't run yet
+  }
 }
 
 async function approveDone(item, meetId) {
@@ -488,6 +502,37 @@ export function inboxCard(items, teamId, onChange) {
 // ------------------------------------------------------------------
 // A published meet: fix or remove swims, see the change log
 // ------------------------------------------------------------------
+// Who reached a new cut at this meet (compared with their best before it)
+async function newCutsCard(meet, results) {
+  const ok = (results || []).filter((r) => r.status !== 'dq' && r.time_cs && r.swimmers && r.swimmers.gender);
+  if (!ok.length || !standardSets().length) return null;
+  const ids = [...new Set(ok.map((r) => r.swimmer_id))];
+  const earlier = (await db.from('results').select('swimmer_id, distance, stroke, time_cs, status, meet_date')
+    .in('swimmer_id', ids).eq('course', meet.course).lt('meet_date', meet.meet_date)).data || [];
+  const before = {};
+  for (const r of earlier) {
+    if (r.status === 'dq' || !r.time_cs) continue;
+    const k = `${r.swimmer_id}|${r.distance}-${r.stroke}`;
+    if (!before[k] || r.time_cs < before[k]) before[k] = r.time_cs;
+  }
+  const rows = [];
+  for (const r of ok) {
+    const event = { distance: r.distance, stroke: r.stroke, course: meet.course, gender: r.swimmers.gender,
+      age: ageForStandards({ ageAtMeet: r.age_at_meet, birthYear: r.swimmers.birth_year, on: meet.meet_date }) };
+    const fresh = newCuts(r.time_cs, before[`${r.swimmer_id}|${r.distance}-${r.stroke}`], event);
+    if (fresh.length) rows.push({ r, top: fresh[fresh.length - 1], count: fresh.length });
+  }
+  if (!rows.length) return null;
+  rows.sort((a, b) => LADDER.indexOf(b.top.set.level) - LADDER.indexOf(a.top.set.level));
+  return h('section', { class: 'card' },
+    h('div', { class: 'card-head' }, h('h2', {}, 'New cuts'), h('span', { class: 'pill ok' }, String(rows.length))),
+    h('ul', { class: 'list' }, rows.map(({ r, top }) => h('li', { class: 'list-row compact' },
+      h('a', { class: 'grow row-link', href: `#/coach/s/${r.swimmer_id}/e/${r.distance}-${r.stroke}-${meet.course}` },
+        h('strong', {}, `${r.swimmers.first_name} ${r.swimmers.last_name}`),
+        h('span', { class: 'muted small block' }, `${eventName(r.distance, r.stroke)} · ${formatTime(r.time_cs)}`)),
+      h('span', { class: 'cut-badge' }, cutLabel(top.set))))));
+}
+
 export async function renderMeet(meetId) {
   const team = coachTeam();
   mount(coachChrome('results'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
@@ -495,8 +540,9 @@ export async function renderMeet(meetId) {
   try {
     [meet, results, edits] = await Promise.all([
       db.from('meets').select('*').eq('id', meetId).maybeSingle().then(must),
-      db.from('results').select('id, swimmer_id, distance, stroke, time_cs, status, dq_reason, place, splits_cs, swimmers(first_name, last_name)')
-        .eq('meet_id', meetId).then(must),
+      withColumns((c) => db.from('results').select(c).eq('meet_id', meetId),
+        'id, swimmer_id, distance, stroke, time_cs, status, dq_reason, place, splits_cs, age_at_meet, swimmers(first_name, last_name, gender, birth_year)',
+        'id, swimmer_id, distance, stroke, time_cs, status, dq_reason, place, splits_cs, age_at_meet, swimmers(first_name, last_name, birth_year)').then(must),
       db.from('result_edits').select('id, action, before, after, edited_at, result_id').eq('team_id', team.id)
         .order('edited_at', { ascending: false }).limit(200).then(must),
     ]);
@@ -524,6 +570,7 @@ export async function renderMeet(meetId) {
     backLink('#/coach/results', 'Results'),
     h('h1', {}, meet.name),
     h('p', { class: 'muted' }, `${formatDate(meet.meet_date)} · ${COURSE_LABEL[meet.course]} · ${results.length} swims`),
+    await newCutsCard(meet, results),
     [...byEvent.entries()].map(([ev, rows]) => h('section', { class: 'card' },
       h('h2', {}, ev),
       h('ul', { class: 'list' }, rows.map((r) => resultRow(r, meetId))))),

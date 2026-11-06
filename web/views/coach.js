@@ -203,7 +203,7 @@ export function rosterDropdown(teamId, data, { open = false, heldNames = [] } = 
         h('h3', { class: 'small-head' }, 'Needs attention'),
         h('ul', { class: 'list' }, flagged.map(({ s, reasons }) => row(s, reasons))),
         flagged.some((x) => x.reasons.some((r) => /Birth/.test(r) || /No birth/.test(r)))
-          ? h('a', { href: '#/coach/birthyears', class: 'small' }, 'Fix birth years on one screen →') : null,
+          ? h('a', { href: '#/coach/birthyears', class: 'small' }, 'Fix birth years (and girls/boys) on one screen →') : null,
         flagged.some((x) => x.reasons.some((r) => /signed in|no parent/.test(r)))
           ? h('a', { href: '#/coach/invites', class: 'small' }, 'Send invite codes →') : null) : null,
       ...groupsOut.map(([name, list]) => h('div', { class: 'stack tight' },
