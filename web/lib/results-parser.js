@@ -30,7 +30,9 @@ export function parseEventLine(line) {
   if (!strokeEntry || !VALID_DISTANCES.has(distance)) return { skip: true, number: Number(m[1] || m[2]) || null };
   const unit = m[5].toLowerCase();
   const course = unit.startsWith('yard') ? 'SCY' : unit.startsWith('lc') ? 'LCM' : unit.startsWith('sc') ? 'SCM' : 'M';
-  return { number: Number(m[1] || m[2]) || null, label: line.trim().replace(/^\(|\)$/g, ''), distance, stroke: strokeEntry[1], course };
+  const who = (m[3] || '').trim();
+  const gender = /^(girls|women|female)\b/i.test(who) ? 'F' : /^(boys|men|male)\b/i.test(who) ? 'M' : null;
+  return { number: Number(m[1] || m[2]) || null, label: line.trim().replace(/^\(|\)$/g, ''), distance, stroke: strokeEntry[1], course, gender };
 }
 
 // "  1 Rivera, Maya R   15 PASA-PC   1:00.50   59.84" → swim fields (or null)
@@ -176,7 +178,7 @@ export function parseResultLines(lines) {
 
     const swim = parseSwimLine(line);
     if (swim) {
-      const record = { ...swim, distance: event.distance, stroke: event.stroke, course: event.course,
+      const record = { ...swim, distance: event.distance, stroke: event.stroke, course: event.course, gender: event.gender,
         event: event.label, eventNumber: event.number, splits: null, splitLen: null, dqReason: null, cumulative: [] };
       swims.push(record);
       last = record; lastKind = 'swim';

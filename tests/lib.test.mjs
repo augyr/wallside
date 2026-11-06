@@ -234,3 +234,25 @@ test('same last name, different first name is skipped automatically; nicknames a
   assert.equal(autoSkipped(chloe), true);
   assert.equal(autoSkipped(teddy), false);
 });
+
+test('time standards: highest cut met, next cut and gap, by gender and age', async () => {
+  const st = await import('../web/lib/standards.js');
+  st.useStandardSets([
+    { id: 'a', level: 'SECT', short: 'Sect', course: 'SCY', entries: [{ gender: 'F', ageMin: null, ageMax: null, times: { '100-FR': 5550 } }] },
+    { id: 'b', level: 'FUT', short: 'Fut', course: 'SCY', entries: [{ gender: 'F', ageMin: null, ageMax: null, times: { '100-FR': 5420 } }] },
+    { id: 'c', level: 'JO', short: 'JO', course: 'SCY', entries: [{ gender: 'F', ageMin: 13, ageMax: 14, times: { '100-FR': 5800 } }] },
+    { id: 'd', level: 'WJ', short: 'WJ', course: 'LCM', entries: [{ gender: 'F', ageMin: null, ageMax: 18, times: { '100-FR': 5600 } }] },
+  ]);
+  const ev = { distance: 100, stroke: 'FR', course: 'SCY', gender: 'F', age: 16 };
+  let c = st.cutStatus(5500, ev);
+  assert.equal(c.met.set.short, 'Sect'); assert.equal(c.next.set.short, 'Fut'); assert.equal(c.next.gap, 80);
+  c = st.cutStatus(5420, ev); assert.equal(c.met.set.short, 'Fut'); assert.equal(c.next, null);
+  assert.equal(st.cutStatus(5500, { ...ev, gender: 'M' }).met, null);
+  assert.equal(st.cutStatus(5700, { ...ev, age: 14 }).met.set.short, 'JO');
+  assert.equal(st.cutStatus(5700, ev).met, null);
+  assert.equal(st.cutStatus(5500, { ...ev, course: 'LCM', age: 19 }).met, null);
+  assert.deepEqual(st.newCuts(5400, 5500, ev).map((x) => x.set.short), ['Fut']);
+  assert.equal(st.ageForStandards({ ageAtMeet: 15, birthYear: 2009 }), 15);
+  assert.equal(st.ageForStandards({ birthYear: 2010, on: '2026-11-06' }), 15);
+  st.useStandardSets([]);
+});

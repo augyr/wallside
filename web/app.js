@@ -62,7 +62,8 @@ export async function signOut() {
 // Demo: made-up PASA team, no sign-in, nothing saved
 // ------------------------------------------------------------------
 export async function startDemo(role) {
-  const { createDemoClient } = await import('./demo.js');
+  const { createDemoClient, DEMO_STANDARDS } = await import('./demo.js');
+  (await import('./lib/standards.js')).useStandardSets(DEMO_STANDARDS);
   if (!state.demo) db = createDemoClient();
   db.setRole(role);
   state.demo = role;

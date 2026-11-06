@@ -118,3 +118,10 @@ export function field(labelText, input, hint) {
     input,
     hint ? h('p', { class: 'hint' }, hint) : null);
 }
+
+// Run a query with newer columns, falling back to older ones if a database update hasn't run yet.
+export async function withColumns(run, cols, fallback) {
+  const r = await run(cols);
+  if (r.error && fallback && /column|does not exist|gender/i.test(r.error.message || '')) return run(fallback);
+  return r;
+}

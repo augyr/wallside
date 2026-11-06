@@ -1,10 +1,11 @@
 // A swimmer's page: coach notes, goals, best times, attendance.
 // Shown to the family (mode 'family') and, with coach tools, to the coach (mode 'coach').
 import { db, state, topBar } from '../app.js';
-import { h, mount, must, toast, busy, field, formatTime, eventName, timeAgo, emptyCard, parseTime, formatDate, backLink } from '../ui.js';
+import { h, mount, must, toast, busy, field, formatTime, eventName, timeAgo, emptyCard, parseTime, formatDate, backLink, withColumns } from '../ui.js';
 import { EVENTS, COURSE_LABEL } from '../lib/time.js';
 import { analyticsLevel } from '../lib/levels.js';
 import { bestTimes } from '../lib/bests.js';
+import { cutStatus, ageForStandards, cutLabel, standardSets } from '../lib/standards.js';
 
 const TAGS = { great: 'Great improvement', keep_working: 'Keep working', new_focus: 'New focus' };
 const KINDS = { time: 'Time', practice: 'Practice', technique: 'Technique', other: 'Other' };
@@ -69,9 +70,8 @@ export async function renderSwimmerPage(id, mode, opts = {}) {
 
   let me; let data;
   try {
-    me = must(await db.from('swimmers')
-      .select('id, first_name, last_name, birth_year, birth_year_estimated, group_id, analytics_level, groups(name, analytics_level), teams(name)')
-      .eq('id', id).maybeSingle());
+    const base = 'id, first_name, last_name, birth_year, birth_year_estimated, group_id, analytics_level, groups(name, analytics_level), teams(name)';
+    me = must(await withColumns((c) => db.from('swimmers').select(c).eq('id', id).maybeSingle(), base + ', gender', base));
     if (!me) throw new Error('Swimmer not found');
     data = await loadSwimmer(me);
   } catch (err) {
@@ -271,7 +271,13 @@ function timesSection(me, results, mode, refresh, seeds = []) {
           h('span', { class: 'muted small block' }, r.fromSeed
             ? ['from seed time', r.meet_name ? 'entered at ' + r.meet_name : null].filter(Boolean).join(' · ')
             : [r.meet_name, formatDate(r.meet_date)].filter(Boolean).join(' · '))),
-        h('span', { class: 'time' }, formatTime(r.time_cs)),
+        h('span', { class: 'time-col' },
+          h('span', { class: 'time' }, formatTime(r.time_cs)),
+          (() => {
+            const c = cutStatus(r.time_cs, { distance: Number(d), stroke: st, course, gender: me.gender, age: ageForStandards({ birthYear: me.birth_year }) });
+            return [c.met ? h('span', { class: 'cut-badge' }, cutLabel(c.met.set)) : null,
+              c.next ? h('span', { class: 'cut-next' }, `${formatTime(c.next.gap)} to ${cutLabel(c.next.set)}`) : null];
+          })()),
         h('span', { 'aria-hidden': 'true', class: 'chev' }, '›')));
   };
   const top = rows.slice(0, 6);
@@ -279,6 +285,8 @@ function timesSection(me, results, mode, refresh, seeds = []) {
   return h('section', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', {}, 'Best times'), rows.length ? h('span', { class: 'muted small' }, 'Tap for analytics') : null),
     toggle,
+    !me.gender && mode === 'coach' && standardSets().length && rows.length
+      ? h('a', { class: 'small', href: `#/coach/s/${me.id}/edit` }, 'Set girls or boys on Edit details to show time standards →') : null,
     rows.length
       ? [h('ul', { class: 'list' }, top.map(item)),
          more.length ? h('details', {}, h('summary', { class: 'small' }, `${more.length} more event${more.length === 1 ? '' : 's'}`), h('ul', { class: 'list' }, more.map(item))) : null]
