@@ -12,7 +12,7 @@ import net from 'node:net';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../../web/config.js';
 
 const MAX_BYTES = 15 * 1024 * 1024;
-const MAX_REDIRECTS = 5;
+const MAX_REDIRECTS = 8;
 const TIMEOUT_MS = 20000;
 const BLOCKED_HOSTS = [/(^|\.)swimcloud\.com$/i];
 const OK_TYPES = /^(text\/html|application\/xhtml\+xml|text\/plain|application\/pdf|application\/octet-stream|application\/x-pdf)\b/i;
@@ -100,13 +100,25 @@ export default async function handler(req) {
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     let upstream;
+    // Some sites set a cookie and redirect back to the same page; keep cookies for this one
+    // request only (per site), so those don't loop. Nothing is kept afterwards.
+    const jar = new Map();   // host -> Map(name -> value)
     for (let hop = 0; ; hop++) {
       if (!(await resolvesPublic(target))) return fail(400, 'That link can\'t be read.');
+      const headers = { 'user-agent': 'Mozilla/5.0 (compatible; Wallside results reader for swim coaches)', accept: 'text/html,application/pdf,*/*;q=0.8' };
+      const cookies = jar.get(target.hostname);
+      if (cookies && cookies.size) headers.cookie = [...cookies].map(([k, v]) => `${k}=${v}`).join('; ');
       try {
-        upstream = await fetch(target, { redirect: 'manual', signal: ctrl.signal,
-          headers: { 'user-agent': 'Wallside results reader (for swim coaches)' } });
+        upstream = await fetch(target, { redirect: 'manual', signal: ctrl.signal, headers });
       } catch {
         return fail(502, 'That site didn\'t respond. Try again in a minute.');
+      }
+      const setCookies = typeof upstream.headers.getSetCookie === 'function' ? upstream.headers.getSetCookie() : [];
+      for (const c of setCookies) {
+        const m = c.match(/^\s*([^=;\s]+)=([^;]*)/);
+        if (!m) continue;
+        if (!jar.has(target.hostname)) jar.set(target.hostname, new Map());
+        jar.get(target.hostname).set(m[1], m[2]);
       }
       if (upstream.status >= 300 && upstream.status < 400 && upstream.headers.get('location')) {
         if (hop >= MAX_REDIRECTS) return fail(502, 'That link redirected too many times.');
