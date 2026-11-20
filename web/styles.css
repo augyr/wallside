@@ -396,3 +396,19 @@ main.page > p.muted:only-child { animation: pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* Pool image behind the header (made by tools/make-pool-image.py) */
+.topbar, .team-head, .hero-top {
+  background-color: var(--header);
+  background-image: linear-gradient(180deg, rgba(13,13,14,.62), rgba(13,13,14,.30)), url('img/pool.jpg');
+  background-size: cover, 1100px auto;
+  background-repeat: no-repeat;
+}
+.topbar { background-position: 0 0, 38% 0; }
+.team-head { background-position: 0 0, 38% -52px; background-image: linear-gradient(180deg, rgba(13,13,14,.30), rgba(13,13,14,.15)), url('img/pool.jpg'); }
+.hero-top { background-size: cover, cover; background-position: 0 0, 45% 55%; background-image: linear-gradient(180deg, rgba(13,13,14,.25), rgba(13,13,14,.55)), url('img/pool.jpg'); }
+.team-head h1, .hero-top .display { text-shadow: 0 2px 14px rgba(0,0,0,.55); }
+
+/* Card that is also a link (Feedback): keep card padding */
+a.card.row-link { margin: 0; padding: 14px; border-radius: var(--radius); }
+a.card.row-link:hover { background: #fff; }
