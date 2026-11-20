@@ -256,3 +256,40 @@ test('time standards: highest cut met, next cut and gap, by gender and age', asy
   assert.equal(st.ageForStandards({ birthYear: 2010, on: '2026-11-06' }), 15);
   st.useStandardSets([]);
 });
+
+// ---------------- any region: team code with region, safe links ----------------
+import { isOurTeam, regionOf, teamRegion } from '../web/lib/matcher.js';
+import { allowedUrl, privateIp } from '../netlify/functions/fetch-results.mjs';
+
+test('team code with region: same club code in another region is not ours', () => {
+  assert.equal(regionOf('PASA-PC'), 'PC');
+  assert.equal(regionOf('PASA'), null);
+  assert.equal(teamRegion('PASA', ['PASA-PC', 'Palo Alto Stanford Aquatics']), 'PC');
+  assert.equal(isOurTeam('PASA-PC', 'PASA', ['PASA-PC']), true);
+  assert.equal(isOurTeam('PASA-FL', 'PASA', ['PASA-PC']), false);
+  assert.equal(isOurTeam('PASA', 'PASA', ['PASA-PC']), true);          // high-school style, no region printed
+  assert.equal(isOurTeam('Palo Alto Stanford Aquatics', 'PASA', ['PASA-PC', 'Palo Alto Stanford Aquatics']), true);
+  assert.equal(isOurTeam('PASA-FL', 'PASA', []), true);                // no region saved yet: old behavior
+  assert.equal(isOurTeam('NCAP-PV', 'NCAP', ['NCAP-PV']), true);
+});
+
+test('results helper: any public site, never SwimCloud or private networks', () => {
+  assert.ok(allowedUrl('https://www.pacswim.org/userfiles/meets/x-results.htm'));
+  assert.ok(allowedUrl('https://www.pvswim.org/results/meet.pdf'));
+  assert.ok(allowedUrl('http://results.example-lsc.org/2026/meet.htm'));
+  assert.equal(allowedUrl('https://www.swimcloud.com/results/123'), null);
+  assert.equal(allowedUrl('https://swimcloud.com/x'), null);
+  assert.equal(allowedUrl('http://localhost/x'), null);
+  assert.equal(allowedUrl('http://169.254.169.254/latest/meta-data'), null);
+  assert.equal(allowedUrl('http://10.0.0.5/x'), null);
+  assert.equal(allowedUrl('http://[::1]/x'), null);
+  assert.equal(allowedUrl('https://user:pw@example.org/x'), null);
+  assert.equal(allowedUrl('https://example.org:8080/x'), null);
+  assert.equal(allowedUrl('ftp://example.org/x'), null);
+  assert.equal(allowedUrl('file:///etc/passwd'), null);
+  assert.equal(privateIp('192.168.1.1'), true);
+  assert.equal(privateIp('::ffff:127.0.0.1'), true);
+  assert.equal(privateIp('8.8.8.8'), false);
+});
+
+console.log(`\n${passed} tests passed (incl. any-region checks)`);

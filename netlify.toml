@@ -11,6 +11,6 @@
   [headers.values]
     X-Robots-Tag = "noindex, nofollow"
 
-# Small server helper that reads Pacific Swimming results for signed-in coaches.
+# Small server helper that reads meet results pages (any swimming region) for signed-in coaches.
 [functions]
   directory = "netlify/functions"

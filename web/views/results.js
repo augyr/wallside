@@ -41,7 +41,7 @@ export async function renderResults() {
               h('span', { class: 'pill' }, `${counts[m.id] || 0} swims`))))))
       : h('section', { class: 'card empty' },
           h('h3', {}, 'No meets yet'),
-          h('p', { class: 'muted' }, 'Paste a Pacific Swimming results link or upload a results PDF. You\'ll review every swim before families see anything.'))));
+          h('p', { class: 'muted' }, 'Paste a results link or upload a results PDF. You\'ll review every swim before families see anything.'))));
 }
 
 // ------------------------------------------------------------------
@@ -74,7 +74,7 @@ export async function renderUpload() {
     }
   });
 
-  const link = h('input', { type: 'url', inputmode: 'url', placeholder: 'https://www.pacswim.org/…/meet-results.htm', 'aria-label': 'Results link' });
+  const link = h('input', { type: 'url', inputmode: 'url', placeholder: 'https://…/meet-results.htm', 'aria-label': 'Results link' });
   const go = h('button', { type: 'submit', class: 'btn primary' }, 'Read results');
   const linkForm = h('form', { class: 'stack', onSubmit: async (e) => {
     e.preventDefault();
@@ -85,7 +85,7 @@ export async function renderUpload() {
       if (!parsed.swims.length) throw new Error('No individual swims found at that link. Use the link to the results themselves, not the meet page.');
       await renderReview(parsed, parsed.meet.name || 'Meet results', { url: parsed.url });
     });
-  } }, field('Results link', link, 'From Pacific Swimming (pacswim.org) — the results page or PDF itself.'), go);
+  } }, field('Results link', link, 'From your swimming region\'s website (e.g. pacswim.org) — the results page or PDF itself.'), go);
 
   mount(coachChrome('results'), h('main', { class: 'page' },
     backLink('#/coach/results', 'Results'),
@@ -451,7 +451,7 @@ async function approveDone(item, meetId) {
 // A results-inbox item opened for full review
 // ------------------------------------------------------------------
 export async function renderInboxReview(id) {
-  mount(coachChrome('home'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Reading results from Pacific Swimming…')));
+  mount(coachChrome('home'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Reading results…')));
   try {
     const item = must(await db.from('results_inbox').select('*').eq('id', id).maybeSingle());
     if (!item) throw new Error('That item is gone.');
@@ -468,8 +468,18 @@ export async function renderInboxReview(id) {
 // ------------------------------------------------------------------
 // "Results to approve" — shown on the coach home and Results tab
 // ------------------------------------------------------------------
+// A meet where your team swam but nobody on your roster did (e.g. other PASA groups):
+// nothing to publish, nothing held, no seeds, no unattached swimmers to check.
+export function nothingToApprove(item) {
+  if (item.kind === 'seeds') return !(item.summary && item.summary.seeds);
+  const sm = item.summary;
+  return !!sm && !sm.swims && !sm.seeds && !sm.heldPeople && !sm.heldSwims && !sm.unattached;
+}
+
 export function inboxCard(items, teamId, onChange) {
-  const pending = (items || []).filter((i) => i.status === 'pending');
+  // Newest meet first; meets without a date go last
+  const pending = (items || []).filter((i) => i.status === 'pending' && !nothingToApprove(i))
+    .sort((a, b) => (b.meet_date || '').localeCompare(a.meet_date || ''));
   if (!pending.length) return null;
   return h('section', { class: 'card stack inbox' },
     h('div', { class: 'card-head' }, h('h2', {}, 'Results to approve'), h('span', { class: 'pill warn' }, String(pending.length))),
@@ -493,6 +503,7 @@ export function inboxCard(items, teamId, onChange) {
         h('div', {}, h('strong', {}, item.meet_name || 'Meet results'),
           h('span', { class: 'muted small block' }, [formatDate(item.meet_date), item.course && item.course !== 'MIXED' ? item.course : null].filter(Boolean).join(' · '))),
         h('p', { class: 'small' }, line),
+        sm.unattached && !sm.swims ? h('p', { class: 'small muted' }, `${sm.unattached} unattached swimmer${sm.unattached === 1 ? '' : 's'} — open Review to pick who they are`) : null,
         held ? h('p', { class: 'small warn-text' }, `${held} held for you to check` + (sm.heldNames && sm.heldNames.length ? `: ${sm.heldNames.slice(0, 3).join('; ')}${sm.heldNames.length > 3 ? '…' : ''}` : '')) : null,
         h('div', { class: 'row' }, approve, item.kind === 'seeds' ? null : h('a', { href: `#/coach/inbox/${item.id}`, class: 'btn small' }, 'Review'), dismiss));
     })),
