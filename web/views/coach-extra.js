@@ -231,7 +231,7 @@ export async function renderBirthYears() {
 
   const sorted = [...rows].sort((a, b) => (!!a.s.birth_year && !a.s.birth_year_estimated) - (!!b.s.birth_year && !b.s.birth_year_estimated));
   mount(coachChrome('roster'), h('main', { class: 'page' },
-    backLink('#/coach', 'Roster'),
+    backLink('#/coach/roster', 'Roster'),
     h('h1', {}, hasGender ? 'Birth years and girls/boys' : 'Birth years'),
     h('p', { class: 'muted' }, 'Missing and estimated years are listed first. Untick "estimated" once a year is confirmed.'
       + (hasGender ? ' G/B is used for time standards and fills in from meet results.' : '')),

@@ -92,7 +92,7 @@ export async function renderSwimmerPage(id, mode, opts = {}) {
 
   const header = mode === 'coach'
     ? h('div', { class: 'stack tight' },
-        backLink('#/coach', 'Roster'),
+        backLink('#/coach/roster', 'Roster'),
         h('div', { class: 'card-head' },
           h('h1', {}, `${me.first_name} ${me.last_name}`),
           h('a', { href: `#/coach/s/${me.id}/edit`, class: 'btn small' }, 'Edit details')),

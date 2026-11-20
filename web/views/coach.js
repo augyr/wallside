@@ -116,6 +116,7 @@ export function coachChrome(tab, subtitle) {
       link('#/coach', 'home', 'Home'),
       link('#/coach/practice', 'practice', 'Practice'),
       link('#/coach/notes', 'notes', 'Notes'),
+      link('#/coach/roster', 'roster', 'Roster'),
       link('#/coach/results', 'results', 'Results'),
       link('#/coach/team', 'team', 'Team')),
   ];
@@ -125,7 +126,7 @@ export async function renderCoach(section = 'home', id, sub, key) {
   const views = await import('./coach-extra.js');
   switch (section) {
     case 'home': return (await import('./coach-home.js')).renderHome();
-    case 'roster': return (await import('./coach-home.js')).renderHome({ rosterOpen: true });
+    case 'roster': return renderRoster();
     case 'notes': return (await import('./coach-home.js')).renderNotes(id);
     case 'practice': return (await import('./coach-home.js')).renderPractice(id, sub, key);
     case 'inbox': return (await import('./results.js')).renderInboxReview(id);
@@ -169,52 +170,93 @@ export function attentionReasons(s, data) {
   return out;
 }
 
-// The roster as one compact dropdown: "Roster · 45 swimmers   3 need attention ▾"
-export function rosterDropdown(teamId, data, { open = false, heldNames = [] } = {}) {
-  const flagged = data.swimmers.map((s) => ({ s, reasons: attentionReasons(s, data) })).filter((x) => x.reasons.length);
-  const need = flagged.length + (heldNames.length ? 1 : 0);
+// Home: a one-line roster summary that opens the Roster tab
+export function rosterSummaryCard(data, { heldNames = [] } = {}) {
+  const flagged = data.swimmers.filter((s) => attentionReasons(s, data).length).length;
+  const need = flagged + (heldNames.length ? 1 : 0);
+  return h('a', { href: '#/coach/roster', class: 'card row-link roster-link' },
+    h('span', { class: 'grow' }, h('strong', {}, 'Roster'),
+      h('span', { class: 'muted' }, ` · ${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'}`)),
+    need ? h('span', { class: 'pill warn' }, `${need} need${need === 1 ? 's' : ''} attention`) : h('span', { class: 'pill ok' }, 'All set'),
+    h('span', { class: 'chev', 'aria-hidden': 'true' }, '›'));
+}
+
+// ------------------------------------------------------------------
+// Roster tab: always open, search, filter by group, add swimmers
+// ------------------------------------------------------------------
+const ROSTER_VIEW = 'wallside.rosterView';
+function rosterView() {
+  try { return JSON.parse(sessionStorage.getItem(ROSTER_VIEW)) || {}; } catch { return {}; }
+}
+function saveRosterView(v) { try { sessionStorage.setItem(ROSTER_VIEW, JSON.stringify(v)); } catch { /* private mode */ } }
+
+export async function renderRoster() {
+  const team = coachTeam();
+  mount(coachChrome('roster'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
+  let data;
+  try { data = await loadTeam(team.id); } catch (err) { toast(err.message, 'error'); return; }
+  const view = { q: '', group: 'all', ...rosterView() };
   const groupName = Object.fromEntries(data.groups.map((g) => [g.id, g.name]));
-  const row = (s, reasons) => h('li', {},
+  const reasons = Object.fromEntries(data.swimmers.map((s) => [s.id, attentionReasons(s, data)]));
+  const flaggedCount = data.swimmers.filter((s) => reasons[s.id].length).length;
+
+  const search = h('input', { type: 'search', value: view.q, placeholder: 'Search swimmers', 'aria-label': 'Search swimmers', autocomplete: 'off', class: 'search' });
+  const chipsWrap = h('div', { class: 'chips scroll-x', role: 'group', 'aria-label': 'Show' });
+  const listWrap = h('div', { class: 'stack' });
+
+  const row = (s) => h('li', {},
     h('a', { class: 'list-row row-link compact', href: `#/coach/s/${s.id}` },
       h('span', { class: 'avatar sm' }, initials(s.first_name, s.last_name)),
       h('span', { class: 'grow' },
         h('strong', {}, `${s.first_name} ${s.last_name}`),
-        h('span', { class: 'muted small block' }, reasons && reasons.length ? reasons.join(' · ')
+        h('span', { class: 'muted small block' }, reasons[s.id].length && view.group === 'attention' ? reasons[s.id].join(' · ')
           : [groupName[s.group_id], s.birth_year ? `born ${s.birth_year}` : null].filter(Boolean).join(' · '))),
       (() => { const st = joinStatus(s, data); return h('span', { class: 'pill ' + st.cls }, st.pill); })()));
 
-  const byGroup = new Map(data.groups.map((g) => [g.id, []]));
-  const ungrouped = [];
-  for (const s of data.swimmers) (byGroup.get(s.group_id) || ungrouped).push(s);
-  const groupsOut = [...data.groups.map((g) => [g.name, byGroup.get(g.id)]), ...(ungrouped.length ? [['No group', ungrouped]] : [])]
-    .filter(([, list]) => list.length);
+  function draw() {
+    saveRosterView(view);
+    const chip = (key, label, count) => h('button', { type: 'button', class: 'chip small' + (view.group === key ? ' on' : ''),
+      'aria-pressed': view.group === key ? 'true' : 'false', onClick: () => { view.group = key; draw(); } },
+      label, count != null ? h('span', { class: 'chip-count' }, String(count)) : null);
+    chipsWrap.replaceChildren(
+      chip('all', 'Everyone', data.swimmers.length),
+      ...data.groups.map((g) => chip(g.id, g.name, data.swimmers.filter((s) => s.group_id === g.id).length)),
+      data.swimmers.some((s) => !s.group_id) ? chip('none', 'No group', data.swimmers.filter((s) => !s.group_id).length) : null,
+      flaggedCount ? chip('attention', 'Needs attention', flaggedCount) : null);
 
-  const summary = h('summary', { class: 'roster-summary' },
-    h('span', { class: 'grow' }, h('strong', {}, 'Roster'), h('span', { class: 'muted' }, ` · ${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'}`)),
-    need ? h('span', { class: 'pill warn' }, `${need} need${need === 1 ? 's' : ''} attention`) : h('span', { class: 'pill ok' }, 'All set'),
-    h('span', { class: 'chev', 'aria-hidden': 'true' }, '▾'));
+    const q = view.q.trim().toLowerCase();
+    const shown = data.swimmers.filter((s) =>
+      (view.group === 'all' || (view.group === 'none' ? !s.group_id : view.group === 'attention' ? reasons[s.id].length : s.group_id === view.group))
+      && (!q || `${s.first_name} ${s.last_name}`.toLowerCase().includes(q) || `${s.last_name} ${s.first_name}`.toLowerCase().includes(q)));
 
-  return h('details', { class: 'card roster-card', open: open || !data.swimmers.length ? true : null },
-    summary,
-    h('div', { class: 'stack' },
-      data.swimmers.length ? null : h('p', { class: 'muted' }, 'Add your whole group at once from a list or spreadsheet, or one swimmer at a time. You can add notes and times before families join.'),
-      heldNames.length ? h('a', { href: '#/coach', class: 'notice-link' },
-        `${heldNames.length} name${heldNames.length === 1 ? '' : 's'} in new results need a match — see Results to approve`) : null,
-      flagged.length ? h('div', { class: 'stack tight' },
-        h('h3', { class: 'small-head' }, 'Needs attention'),
-        h('ul', { class: 'list' }, flagged.map(({ s, reasons }) => row(s, reasons))),
-        flagged.some((x) => x.reasons.some((r) => /Birth/.test(r) || /No birth/.test(r)))
-          ? h('a', { href: '#/coach/birthyears', class: 'small' }, 'Fix birth years (and girls/boys) on one screen →') : null,
-        flagged.some((x) => x.reasons.some((r) => /signed in|no parent/.test(r)))
-          ? h('a', { href: '#/coach/invites', class: 'small' }, 'Send invite codes →') : null) : null,
-      ...groupsOut.map(([name, list]) => h('div', { class: 'stack tight' },
-        h('h3', { class: 'small-head' }, `${name} · ${list.length}`),
-        h('ul', { class: 'list' }, list.map((s) => row(s))))),
-      h('div', { class: 'stack tight' },
-        h('a', { href: '#/coach/add-swimmers', class: 'btn primary center' }, '+ Add a group of swimmers'),
-        h('p', { class: 'muted small center' }, 'Paste a list or upload a spreadsheet — check it, then add everyone at once.'),
-        addSwimmerCard(teamId, data.groups),
-        addGroupCard(teamId, data.groups))));
+    // grouped when showing everyone, flat otherwise
+    let body;
+    if (!shown.length) {
+      body = h('p', { class: 'muted' }, data.swimmers.length ? 'No swimmers match.' : 'No swimmers yet — add your group above.');
+    } else if (view.group === 'all' && !q) {
+      const byGroup = [...data.groups.map((g) => [g.name, shown.filter((s) => s.group_id === g.id)]), ['No group', shown.filter((s) => !s.group_id)]]
+        .filter(([, l]) => l.length);
+      body = h('div', { class: 'stack' }, byGroup.map(([name, l]) => h('div', { class: 'stack tight' },
+        h('h3', { class: 'small-head' }, `${name} · ${l.length}`), h('ul', { class: 'list' }, l.map(row)))));
+    } else {
+      body = h('ul', { class: 'list' }, shown.map(row));
+    }
+    const extra = view.group === 'attention' ? h('div', { class: 'row' },
+      h('a', { href: '#/coach/birthyears', class: 'btn small' }, 'Fix birth years'),
+      h('a', { href: '#/coach/invites', class: 'btn small' }, 'Send invite codes')) : null;
+    listWrap.replaceChildren(extra, body);
+  }
+  search.addEventListener('input', () => { view.q = search.value; draw(); });
+
+  mount(coachChrome('roster', `${data.swimmers.length} swimmer${data.swimmers.length === 1 ? '' : 's'} · ${data.groups.length} group${data.groups.length === 1 ? '' : 's'}`),
+    h('main', { class: 'page' },
+      h('div', { class: 'row roster-actions' },
+        h('a', { href: '#/coach/add-swimmers', class: 'btn primary grow' }, '+ Add a group of swimmers')),
+      h('section', { class: 'card stack' }, search, chipsWrap, listWrap),
+      h('section', { class: 'card stack tight' },
+        addSwimmerCard(team.id, data.groups),
+        addGroupCard(team.id, data.groups))));
+  draw();
 }
 
 function groupSelect(groups) {
@@ -236,7 +278,7 @@ function addSwimmerCard(teamId, groups) {
       }));
       toast(`${first.value.trim()} added`, 'success');
       const keepGroup = group.value;
-      await renderCoach('roster');
+      await renderRoster();
       // keep the form open for the next swimmer, same group
       const again = document.querySelector('details.add-one');
       if (again) {
@@ -260,7 +302,7 @@ function addGroupCard(teamId, groups) {
     e.preventDefault();
     await busy(form.querySelector('button'), async () => {
       must(await db.from('groups').insert({ team_id: teamId, name: name.value.trim(), sort: groups.length }));
-      renderCoach('roster');
+      renderRoster();
     });
   } }, name, h('button', { type: 'submit', class: 'btn small' }, 'Add group'));
   return h('details', { class: 'sub' }, h('summary', {}, '+ Add a training group'), form);

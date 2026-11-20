@@ -10,7 +10,7 @@ const FROM_COLUMN = '__column';
 
 export async function renderAddSwimmers() {
   const team = coachTeam();
-  mount(coachChrome('home'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
+  mount(coachChrome('roster'), h('main', { class: 'page' }, h('p', { class: 'muted' }, 'Loading…')));
   let roster; let groups;
   try {
     [roster, groups] = await Promise.all([
@@ -196,7 +196,7 @@ export async function renderAddSwimmers() {
         add));
   }
 
-  mount(coachChrome('home'), h('main', { class: 'page' },
+  mount(coachChrome('roster'), h('main', { class: 'page' },
     backLink('#/coach/roster', 'Roster'),
     h('h1', {}, 'Add swimmers'),
     h('section', { class: 'card stack' },

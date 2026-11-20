@@ -1,7 +1,7 @@
 // Coach: Home (today at a glance), Notes (write + feedback coverage) and Practice (attendance).
 import { db, state } from '../app.js';
 import { h, mount, must, toast, busy, field, initials, timeAgo, formatDate, friendlyError } from '../ui.js';
-import { coachChrome, coachTeam, loadTeam, rosterDropdown } from './coach.js';
+import { coachChrome, coachTeam, loadTeam, rosterSummaryCard } from './coach.js';
 
 const TAGS = { great: 'Great improvement', keep_working: 'Keep working', new_focus: 'New focus' };
 const STARTERS = { great: 'Great improvement on ', keep_working: 'Keep working on ', new_focus: '' };
@@ -51,7 +51,7 @@ export async function renderHome({ rosterOpen = false } = {}) {
       coverageCard(data, notes),
       h('details', { class: 'card' }, h('summary', {}, 'Write a note'),
         noteComposer({ team, data, onSent: () => renderHome() })),
-      rosterDropdown(team.id, data, { open: rosterOpen, heldNames }),
+      rosterSummaryCard(data, { heldNames }),
       team.sourceUrl || !team.code ? null : h('a', { href: '#/coach/team', class: 'notice-link quiet' },
         'Turn on automatic results — the app finds new PASA meets for you to approve →')));
 
