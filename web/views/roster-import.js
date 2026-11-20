@@ -146,15 +146,18 @@ export async function renderAddSwimmers() {
         const name = newGroupName.value.trim();
         if (!name) throw new Error('Name the new group first.');
         const existing = groups.find((g) => g.name.toLowerCase() === name.toLowerCase());
-        fixedGroup = existing ? existing.id
-          : must(await db.from('groups').insert({ team_id: team.id, name, sort: groups.length }).select('id').single()).id;
+        if (existing) fixedGroup = existing.id;
+        else {
+          fixedGroup = crypto.randomUUID();
+          must(await db.from('groups').insert({ id: fixedGroup, team_id: team.id, name, sort: groups.length }));
+        }
       }
       const byName = { ...groupIdByName };
       if (fixedGroup === FROM_COLUMN) {
         for (const name of missing) {
-          const g = must(await db.from('groups').insert({ team_id: team.id, name, sort: groups.length + Object.keys(byName).length })
-            .select('id').single());
-          byName[name.toLowerCase()] = g.id;
+          const id = crypto.randomUUID();
+          must(await db.from('groups').insert({ id, team_id: team.id, name, sort: Object.keys(byName).length }));
+          byName[name.toLowerCase()] = id;
         }
       }
       const records = chosen.map((p) => ({
