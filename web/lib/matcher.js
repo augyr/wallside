@@ -70,8 +70,25 @@ export function isUnattached(team) {
   return code === 'UN' || code === 'UNAT' || /^unattached/i.test(String(team || '').trim());
 }
 
+/** "PASA-PC" → "PC": the region (LSC) part of a team code as printed in results, or null. */
+export function regionOf(team) {
+  const m = String(team || '').trim().match(/^[A-Za-z0-9]{2,8}-([A-Za-z]{2})$/);
+  return m ? m[1].toUpperCase() : null;
+}
+
+/** The team's own region, from a saved name like "PASA-PC" (kept with the other names). */
+export function teamRegion(teamCode, aliases = []) {
+  const code = String(teamCode || '').toUpperCase();
+  for (const a of aliases || []) if (teamCodeOf(a) === code && regionOf(a)) return regionOf(a);
+  return null;
+}
+
 export function isOurTeam(team, teamCode, aliases = []) {
   const code = teamCodeOf(team);
+  // Same club code in another region (e.g. PASA-PC vs PASA-FL) is a different club
+  const region = regionOf(team);
+  const ours = teamRegion(teamCode, aliases);
+  if (region && ours && region !== ours) return false;
   if (teamCode && code === teamCode.toUpperCase()) return true;
   const t = compact(team);
   return aliases.some((a) => a && (compact(a) === t || teamCodeOf(a) === code));

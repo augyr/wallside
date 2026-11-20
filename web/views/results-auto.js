@@ -1,4 +1,4 @@
-// Reading results from a file or a Pacific Swimming link, the automatic results check,
+// Reading results from a file or a results link, the automatic results check,
 // and the "Results to approve" inbox.
 import { db, state } from '../app.js';
 import { must } from '../ui.js';
@@ -51,7 +51,12 @@ export function htmlToText(html) {
   return doc.body ? doc.body.textContent : html;
 }
 
-/** Fetch a pacswim.org page or file through Wallside's helper (signed-in coaches only). */
+/** Sites Wallside never reads from (see the project rules: no SwimCloud). Mirrors the helper's list. */
+export function blockedHost(hostname) {
+  return /(^|\.)swimcloud\.com$/i.test(hostname || '');
+}
+
+/** Fetch a results page or file through Wallside's helper (signed-in coaches only). */
 export async function fetchViaHelper(url) {
   if (state.demo) throw new Error('Links can\'t be fetched in the demo — upload a file instead.');
   const { data } = await db.auth.getSession();
@@ -171,7 +176,7 @@ export function resultLinks(html, baseUrl) {
     const isDoc = /\.(htm|html|pdf)$/i.test(u.pathname);
     const saysResults = /result/i.test(u.pathname) || /result/i.test(text);
     if (!isDoc || !saysResults || seen.has(u.href)) continue;
-    if (!/(^|\.)pacswim\.org$/i.test(u.hostname)) continue;
+    if (!/^https?:$/.test(u.protocol) || blockedHost(u.hostname)) continue;
     seen.add(u.href);
     out.push({ url: u.href, text });
   }
@@ -215,7 +220,9 @@ export function runAutoCheck(team, { force = false } = {}) {
           const base = { team_id: team.id, source_url: link.url, meet_name: auto.meet.name, meet_date: auto.meet.meet_date, course: auto.meet.course };
           const existing = (meets || []).find((m) => m.meet_date === auto.meet.meet_date
             && m.name.trim().toLowerCase() === (auto.meet.name || '').trim().toLowerCase());
-          if (!auto.summary.ours) row = { ...base, status: 'not_ours' };
+          const sm = auto.summary;
+          // not_ours: none of our swims — or our club swam but nobody on this coach's roster did
+          if (!sm.ours || (!sm.swims && !sm.seeds && !sm.heldPeople && !sm.heldSwims && !sm.unattached)) row = { ...base, status: 'not_ours' };
           else if (existing) {
             // Already uploaded by hand: only offer the seed times it didn't have
             row = auto.seeds.length

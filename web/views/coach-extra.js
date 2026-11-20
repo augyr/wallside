@@ -3,6 +3,7 @@ import { db, loadRoles } from '../app.js';
 import { h, mount, must, toast, busy, field, backLink, timeAgo, withColumns } from '../ui.js';
 import { coachChrome, coachTeam } from './coach.js';
 import { LEVELS, LEVEL_LABEL, analyticsLevel } from '../lib/levels.js';
+import { teamCodeOf, regionOf, teamRegion } from '../lib/matcher.js';
 
 function levelSelect(current, autoLabel) {
   return h('select', {},
@@ -120,10 +121,10 @@ export async function renderTeamSettings() {
 
 // Where the app looks for new results automatically
 function autoResultsCard(team) {
-  const url = h('input', { type: 'url', inputmode: 'url', value: team.sourceUrl || '', placeholder: 'https://www.pacswim.org/…' });
+  const url = h('input', { type: 'url', inputmode: 'url', value: team.sourceUrl || '', placeholder: 'https://www.pacswim.org/swim-meet-results' });
   const status = h('p', { class: 'muted small' }, team.sourceUrl
     ? (team.checkedAt ? `Last checked ${timeAgo(team.checkedAt).toLowerCase()}.` : 'Not checked yet.') + ' Checks when you open the app, up to twice a day.'
-    : 'Off. Paste the Pacific Swimming page where meet results are listed.');
+    : 'Off. Paste your swimming region\'s page where meet results are listed (for Pacific Swimming: pacswim.org/swim-meet-results).');
   const save = h('button', { type: 'submit', class: 'btn primary' }, 'Save');
   const check = h('button', { type: 'button', class: 'btn', onClick: async () => {
     await busy(check, async () => {
@@ -139,7 +140,11 @@ function autoResultsCard(team) {
     e.preventDefault();
     await busy(save, async () => {
       const v = url.value.trim();
-      if (v && !/^https?:\/\/(www\.)?pacswim\.org\//i.test(v)) throw new Error('Use a Pacific Swimming (pacswim.org) link.');
+      if (v) {
+        let u; try { u = new URL(v); } catch { throw new Error('That doesn\'t look like a web link.'); }
+        if (!/^https?:$/.test(u.protocol)) throw new Error('Use a web link starting with https://');
+        if (/(^|\.)swimcloud\.com$/i.test(u.hostname)) throw new Error('SwimCloud can\'t be used — paste your region\'s results page instead.');
+      }
       must(await db.from('teams').update({ results_source_url: v || null }).eq('id', team.id));
       await loadRoles();
       toast(v ? 'Automatic results on' : 'Automatic results off', 'success');
@@ -154,24 +159,31 @@ function autoResultsCard(team) {
 
 // Also used by the upload screen when a team has no code yet
 export function teamCodeCard(team, onSaved) {
-  const suggested = team.code || team.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
-  const code = h('input', { type: 'text', required: true, maxlength: 8, value: suggested, class: 'code-input', autocomplete: 'off' });
-  const aliases = h('textarea', { rows: 3, placeholder: 'e.g. Palo Alto Stanford Aquatics' }, (team.aliases || []).join('\n'));
+  const region = teamRegion(team.code, team.aliases || []);
+  const suggested = team.code ? team.code + (region ? '-' + region : '')
+    : team.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 4).toUpperCase();
+  const code = h('input', { type: 'text', required: true, maxlength: 11, value: suggested, class: 'code-input', autocomplete: 'off', placeholder: 'PASA-PC' });
+  // the "CODE-XX" entry lives in the code field, so leave it out of the other-names box
+  const others = (team.aliases || []).filter((a) => !(teamCodeOf(a) === (team.code || '').toUpperCase() && regionOf(a)));
+  const aliases = h('textarea', { rows: 3, placeholder: 'e.g. Palo Alto Stanford Aquatics' }, others.join('\n'));
   const form = h('form', { class: 'stack', onSubmit: async (e) => {
     e.preventDefault();
     await busy(form.querySelector('button'), async () => {
-      const value = code.value.trim().toUpperCase();
-      if (!/^[A-Z0-9]{2,8}$/.test(value)) throw new Error('Team code is 2–8 letters or numbers, like PASA.');
+      const value = code.value.trim().toUpperCase().replace(/\s+/g, '');
+      const m = value.match(/^([A-Z0-9]{2,8})-([A-Z]{2})$/);
+      if (!m) throw new Error('Enter the code exactly as results show it, with the region — like PASA-PC.');
+      const extra = aliases.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)
+        .filter((a) => !(teamCodeOf(a) === m[1] && regionOf(a)));
       must(await db.from('teams').update({
-        team_code: value,
-        team_aliases: aliases.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean).slice(0, 10),
+        team_code: m[1],
+        team_aliases: [value, ...extra].slice(0, 10),
       }).eq('id', team.id));
       await loadRoles();
       toast('Team code saved', 'success');
       if (onSaved) onSaved();
     });
   } },
-    field('Team code in meet results', code, 'Results list teams like "PASA-PC". Only swims with this code are imported.'),
+    field('Team code in meet results', code, 'Exactly as results print it, including the region after the dash — e.g. PASA-PC (PC = Pacific Swimming). Only swims with this code are imported; the same club code from another region is ignored.'),
     field('Other names your team appears under (optional)', aliases, 'One per line — for meets that print the full team name instead of the code.'),
     h('button', { type: 'submit', class: 'btn primary' }, 'Save team code'));
   return h('section', { class: 'card' }, h('h2', {}, 'Team code'), form);
