@@ -59,11 +59,11 @@ export async function renderAddSwimmers() {
   function fillGroupPick() {
     const keep = groupPick.value;
     const hasColumn = roles.includes('group');
-    groupPick.replaceChildren(
+    groupPick.replaceChildren(...[
       hasColumn ? h('option', { value: FROM_COLUMN }, 'Use the Group column') : null,
       ...groups.map((g) => h('option', { value: g.id }, g.name)),
       h('option', { value: '' }, 'No group'),
-      h('option', { value: NEW_GROUP }, '+ New group…'));
+      h('option', { value: NEW_GROUP }, '+ New group…')].filter(Boolean));
     const options = [...groupPick.options].map((o) => o.value);
     groupPick.value = userPicked && options.includes(keep) ? keep : hasColumn ? FROM_COLUMN : (groups[0] ? groups[0].id : '');
     newGroupWrap.hidden = groupPick.value !== NEW_GROUP;
