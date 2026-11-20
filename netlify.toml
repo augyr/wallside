@@ -15,7 +15,7 @@
 [functions]
   directory = "netlify/functions"
 
-# Short, shareable demo link: wallside.netlify.app/demo
+# Short, shareable demo link: wallsideswim.com/demo
 [[redirects]]
   from = "/demo"
   to = "/#/demo"
