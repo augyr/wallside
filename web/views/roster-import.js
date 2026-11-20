@@ -24,6 +24,7 @@ export async function renderAddSwimmers() {
   let header = false;
   let roles = [];
   let fileName = '';
+  let columnsOpen = false;
 
   const box = h('textarea', { rows: 7, placeholder: 'Paste from a spreadsheet, team software or an email — for example:\nMaya Rivera, 2012, F\nRivera, Maya\t3/14/2012\tGirl\nOne swimmer per line. Birth year, girls/boys and group are optional.' });
   const file = h('input', { type: 'file', accept: '.csv,.tsv,.txt,.xlsx,.xls,text/csv,text/plain' });
@@ -52,7 +53,8 @@ export async function renderAddSwimmers() {
   const groupPick = h('select', {});
   const newGroupName = h('input', { type: 'text', maxlength: 60, placeholder: 'New group name' });
   const newGroupWrap = h('div', { hidden: true }, newGroupName);
-  groupPick.addEventListener('change', () => { newGroupWrap.hidden = groupPick.value !== NEW_GROUP; draw(false); });
+  let userPicked = false;   // until the coach picks, follow the list (Group column if there is one)
+  groupPick.addEventListener('change', () => { userPicked = true; newGroupWrap.hidden = groupPick.value !== NEW_GROUP; draw(false); });
 
   function fillGroupPick() {
     const keep = groupPick.value;
@@ -63,7 +65,7 @@ export async function renderAddSwimmers() {
       h('option', { value: '' }, 'No group'),
       h('option', { value: NEW_GROUP }, '+ New group…'));
     const options = [...groupPick.options].map((o) => o.value);
-    groupPick.value = options.includes(keep) && keep !== '' ? keep : hasColumn ? FROM_COLUMN : (groups[0] ? groups[0].id : '');
+    groupPick.value = userPicked && options.includes(keep) ? keep : hasColumn ? FROM_COLUMN : (groups[0] ? groups[0].id : '');
     newGroupWrap.hidden = groupPick.value !== NEW_GROUP;
   }
 
@@ -79,8 +81,11 @@ export async function renderAddSwimmers() {
 
     // column picker
     const sample = (i) => rows.slice(header ? 1 : 0, (header ? 1 : 0) + 3).map((r) => r[i]).filter(Boolean).join(' · ');
-    const columns = h('div', { class: 'stack tight' },
-      h('h3', { class: 'small-head' }, fileName ? `Columns in ${fileName}` : 'Columns'),
+    const shortRole = { first: 'First', last: 'Last', full: 'Name', lastfirst: 'Last, First', birth: 'Born', age: 'Age', gender: 'Girl/boy', group: 'Group' };
+    const used = roles.filter((r) => r !== 'ignore').map((r) => shortRole[r]).join(' · ') || 'nothing yet';
+    const columns = h('details', { class: 'stack tight', open: columnsOpen ? true : null,
+      onToggle: (e) => { columnsOpen = e.target.open; } },
+      h('summary', {}, h('strong', {}, fileName ? `Columns in ${fileName}: ` : 'Columns: '), used, h('span', { class: 'muted small' }, ' — tap to change')),
       h('ul', { class: 'list' }, roles.map((role, i) => {
         const sel = h('select', { 'aria-label': `Column ${i + 1}` },
           Object.entries(ROLES).map(([v, t]) => h('option', { value: v, selected: v === role ? true : null }, t)));
