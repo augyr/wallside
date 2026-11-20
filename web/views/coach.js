@@ -139,6 +139,7 @@ export async function renderCoach(section = 'home', id, sub, key) {
     case 'team': return views.renderTeamSettings();
     case 'birthyears': return views.renderBirthYears();
     case 'invites': return renderInvites();
+    case 'add-swimmers': return (await import('./roster-import.js')).renderAddSwimmers();
     default: return (await import('./coach-home.js')).renderHome();
   }
 }
@@ -196,7 +197,7 @@ export function rosterDropdown(teamId, data, { open = false, heldNames = [] } = 
   return h('details', { class: 'card roster-card', open: open || !data.swimmers.length ? true : null },
     summary,
     h('div', { class: 'stack' },
-      data.swimmers.length ? null : h('p', { class: 'muted' }, 'Add swimmers one at a time, or paste a list from your team spreadsheet. You can add notes and times before families join.'),
+      data.swimmers.length ? null : h('p', { class: 'muted' }, 'Add your whole group at once from a list or spreadsheet, or one swimmer at a time. You can add notes and times before families join.'),
       heldNames.length ? h('a', { href: '#/coach', class: 'notice-link' },
         `${heldNames.length} name${heldNames.length === 1 ? '' : 's'} in new results need a match — see Results to approve`) : null,
       flagged.length ? h('div', { class: 'stack tight' },
@@ -210,8 +211,9 @@ export function rosterDropdown(teamId, data, { open = false, heldNames = [] } = 
         h('h3', { class: 'small-head' }, `${name} · ${list.length}`),
         h('ul', { class: 'list' }, list.map((s) => row(s))))),
       h('div', { class: 'stack tight' },
+        h('a', { href: '#/coach/add-swimmers', class: 'btn primary center' }, '+ Add a group of swimmers'),
+        h('p', { class: 'muted small center' }, 'Paste a list or upload a spreadsheet — check it, then add everyone at once.'),
         addSwimmerCard(teamId, data.groups),
-        pasteListCard(teamId, data.groups),
         addGroupCard(teamId, data.groups))));
 }
 
@@ -233,57 +235,23 @@ function addSwimmerCard(teamId, groups) {
         birth_year: year.value ? Number(year.value) : null, group_id: group.value || null,
       }));
       toast(`${first.value.trim()} added`, 'success');
-      renderCoach('roster');
+      const keepGroup = group.value;
+      await renderCoach('roster');
+      // keep the form open for the next swimmer, same group
+      const again = document.querySelector('details.add-one');
+      if (again) {
+        again.open = true;
+        const sel = again.querySelector('select');
+        if (sel) sel.value = keepGroup;
+        const firstInput = again.querySelector('input');
+        if (firstInput) firstInput.focus();
+      }
     });
   } },
     h('div', { class: 'grid2' }, field('First name', first), field('Last name', last)),
     h('div', { class: 'grid2' }, field('Birth year', year), field('Group', group)),
     h('button', { type: 'submit', class: 'btn primary' }, 'Add swimmer'));
-  return h('details', { class: 'sub' }, h('summary', {}, '+ Add a swimmer'), form);
-}
-
-// Paste lines like:  Maya Rivera, 2012, Senior
-export function parseRosterLines(text, groupsByName) {
-  const rows = [];
-  const problems = [];
-  text.split(/\r?\n/).forEach((line, i) => {
-    const raw = line.trim();
-    if (!raw) return;
-    const parts = raw.split(/[,\t]/).map((p) => p.trim()).filter(Boolean);
-    const nameParts = (parts[0] || '').split(/\s+/);
-    if (nameParts.length < 2) { problems.push(`Line ${i + 1}: needs a first and last name`); return; }
-    const yearPart = parts.find((p) => /^\d{4}$/.test(p));
-    const groupPart = parts.slice(1).find((p) => !/^\d{4}$/.test(p));
-    const groupId = groupPart ? groupsByName[groupPart.toLowerCase()] : null;
-    if (groupPart && !groupId) problems.push(`Line ${i + 1}: no group called "${groupPart}" — added without a group`);
-    rows.push({
-      first_name: nameParts[0],
-      last_name: nameParts.slice(1).join(' '),
-      birth_year: yearPart ? Number(yearPart) : null,
-      group_id: groupId || null,
-    });
-  });
-  return { rows, problems };
-}
-
-function pasteListCard(teamId, groups) {
-  const groupsByName = Object.fromEntries(groups.map((g) => [g.name.toLowerCase(), g.id]));
-  const box = h('textarea', { rows: 6, placeholder: 'Maya Rivera, 2012, Senior\nLeo Kim, 2017, Novice' });
-  const form = h('form', { class: 'stack', onSubmit: async (e) => {
-    e.preventDefault();
-    await busy(form.querySelector('button'), async () => {
-      const { rows, problems } = parseRosterLines(box.value, groupsByName);
-      if (!rows.length) throw new Error('Nothing to add. Put one swimmer per line.');
-      must(await db.from('swimmers').insert(rows.map((r) => ({ ...r, team_id: teamId }))));
-      toast(`${rows.length} swimmers added` + (problems.length ? ` · ${problems.length} note(s)` : ''), 'success');
-      if (problems.length) alert(problems.join('\n'));
-      renderCoach('roster');
-    });
-  } },
-    field('One swimmer per line: name, birth year, group', box,
-      'Copy columns straight from a spreadsheet — commas or tabs both work.'),
-    h('button', { type: 'submit', class: 'btn primary' }, 'Add everyone'));
-  return h('details', { class: 'sub' }, h('summary', {}, '+ Paste a roster list'), form);
+  return h('details', { class: 'sub add-one' }, h('summary', {}, '+ Add one swimmer'), form);
 }
 
 function addGroupCard(teamId, groups) {

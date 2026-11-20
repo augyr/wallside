@@ -292,4 +292,46 @@ test('results helper: any public site, never SwimCloud or private networks', () 
   assert.equal(privateIp('8.8.8.8'), false);
 });
 
-console.log(`\n${passed} tests passed (incl. any-region checks)`);
+// ---------------- adding a group of swimmers ----------------
+import { splitRows, guessColumns, buildPeople, splitName, birthYearOf } from '../web/lib/roster-parse.js';
+const NOW = new Date('2026-11-20');
+const readList = (text, groups = [], roster = []) => {
+  const rows = splitRows(text);
+  const g = guessColumns(rows, groups);
+  return { ...g, people: buildPeople(rows, { ...g, roster, now: NOW }) };
+};
+
+test('roster paste: old "Name, year, group" format still works', () => {
+  const r = readList('Maya Rivera, 2012, Senior\nLeo Kim, 2017, Age Group', ['Senior', 'Age Group']);
+  assert.deepEqual(r.roles, ['full', 'birth', 'group']);
+  assert.deepEqual(r.people.map((p) => [p.first, p.last, p.birth_year, p.groupName]), [['Maya', 'Rivera', 2012, 'Senior'], ['Leo', 'Kim', 2017, 'Age Group']]);
+});
+
+test('roster paste: team-software export with headers, dates, genders, repeats', () => {
+  const r = readList('First Name\tLast Name\tPreferred Name\tBirth Date\tAge\tGender\tRoster Group\nMAYA\tRIVERA\t\t03/14/2012\t14\tFemale\tSenior\nLeo\tKim\tLeo\t2017-01-02\t9\tMale\tAge Group\nMaya\tRivera\t\t3/14/2012\t14\tF\tSenior');
+  assert.equal(r.header, true);
+  assert.deepEqual(r.roles, ['first', 'last', 'ignore', 'birth', 'age', 'gender', 'group']);
+  assert.deepEqual(r.people.map((p) => [p.first, p.last, p.birth_year, p.gender, p.status]),
+    [['Maya', 'Rivera', 2012, 'F', 'new'], ['Leo', 'Kim', 2017, 'M', 'new'], ['Maya', 'Rivera', 2012, 'F', 'repeat']]);
+});
+
+test('roster paste: "Last, First", ages, swimmers already on the roster', () => {
+  const r = readList('"Byer, Dagny R",2010,F\n"Kim, Leo J",2017,M', [], [{ first_name: 'Dagny', last_name: 'Byer' }]);
+  assert.deepEqual(r.people.map((p) => [p.first, p.last, p.status]), [['Dagny', 'Byer', 'onRoster'], ['Leo', 'Kim', 'new']]);
+  const a = readList('Swimmer\tAge\nRivera, Maya\t14');
+  assert.deepEqual([a.people[0].first, a.people[0].birth_year, a.people[0].estimated], ['Maya', 2012, true]);
+});
+
+test('names and birth dates in many shapes', () => {
+  assert.deepEqual(splitName('Nirelle de Witt'), { first: 'Nirelle', last: 'de Witt' });
+  assert.deepEqual(splitName('Teddy J. Laster'), { first: 'Teddy', last: 'Laster' });
+  assert.deepEqual(splitName('LASTER, TEDDY'), { first: 'Teddy', last: 'Laster' });
+  assert.equal(birthYearOf('3/14/12', NOW), 2012);
+  assert.equal(birthYearOf('Mar 14, 2012', NOW), 2012);
+  assert.equal(birthYearOf('41000', NOW), 2012);   // Excel date number
+  assert.equal(birthYearOf('Senior', NOW), null);
+  const missing = readList('Maya\nLeo Kim');
+  assert.equal(missing.people[0].status, 'problem');
+});
+
+console.log(`\n${passed} tests passed (incl. any-region and roster checks)`);
