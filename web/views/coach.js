@@ -218,11 +218,11 @@ export async function renderRoster() {
     const chip = (key, label, count) => h('button', { type: 'button', class: 'chip small' + (view.group === key ? ' on' : ''),
       'aria-pressed': view.group === key ? 'true' : 'false', onClick: () => { view.group = key; draw(); } },
       label, count != null ? h('span', { class: 'chip-count' }, String(count)) : null);
-    chipsWrap.replaceChildren(
+    chipsWrap.replaceChildren(...[
       chip('all', 'Everyone', data.swimmers.length),
       ...data.groups.map((g) => chip(g.id, g.name, data.swimmers.filter((s) => s.group_id === g.id).length)),
       data.swimmers.some((s) => !s.group_id) ? chip('none', 'No group', data.swimmers.filter((s) => !s.group_id).length) : null,
-      flaggedCount ? chip('attention', 'Needs attention', flaggedCount) : null);
+      flaggedCount ? chip('attention', 'Needs attention', flaggedCount) : null].filter(Boolean));
 
     const q = view.q.trim().toLowerCase();
     const shown = data.swimmers.filter((s) =>
@@ -244,7 +244,7 @@ export async function renderRoster() {
     const extra = view.group === 'attention' ? h('div', { class: 'row' },
       h('a', { href: '#/coach/birthyears', class: 'btn small' }, 'Fix birth years'),
       h('a', { href: '#/coach/invites', class: 'btn small' }, 'Send invite codes')) : null;
-    listWrap.replaceChildren(extra, body);
+    listWrap.replaceChildren(...[extra, body].filter(Boolean));
   }
   search.addEventListener('input', () => { view.q = search.value; draw(); });
 
