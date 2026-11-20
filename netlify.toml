@@ -14,3 +14,10 @@
 # Small server helper that reads meet results pages (any swimming region) for signed-in coaches.
 [functions]
   directory = "netlify/functions"
+
+# Short, shareable demo link: wallside.netlify.app/demo
+[[redirects]]
+  from = "/demo"
+  to = "/#/demo"
+  status = 302
+  force = true
