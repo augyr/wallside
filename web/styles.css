@@ -289,8 +289,10 @@ h1 { letter-spacing: .005em; }
 .topbar { background: var(--header); }
 .brand { font-size: 24px; letter-spacing: .04em; }
 .topnav a:hover, .topnav .link:hover { color: #fff; }
-.team-head { position: relative; padding-bottom: 18px; }
-.team-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--accent); }
+.team-head { position: relative; padding-bottom: 28px; }
+.team-head::after { content: ''; position: absolute; left: 0; right: 0; bottom: 7px; height: 6px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='6'%3E%3Cg%3E%3Crect x='1' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='14' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='27' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='40' y='.5' width='11' height='5' rx='2.5' fill='%23F4F4F5'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 52px 6px repeat-x; }
+/* the rope's cord: a hairline behind the floats */
+.team-head::before { content: ''; position: absolute; left: 0; right: 0; bottom: 9px; height: 2px; background: #2A2B2E; }
 .team-head p { color: #B9BCC2; }
 .team-head h1 { font-size: 30px; }
 
@@ -385,8 +387,9 @@ main.page > p.muted:only-child { animation: pulse 1.2s ease-in-out infinite; }
 
 /* Login: the one bold moment — big condensed type on cardinal */
 .hero { padding-top: 0; }
-.hero-top { background: var(--header); color: #fff; margin: -16px -16px 8px; padding: 80px 20px 36px; position: relative; }
-.hero-top::after { content: ''; position: absolute; left: 20px; bottom: 0; width: 56px; height: 4px; background: var(--accent); }
+.hero-top { background: var(--header); color: #fff; margin: -16px -16px 8px; padding: 80px 20px 44px; position: relative; }
+.hero-top::after { content: ''; position: absolute; left: 0; right: 0; bottom: 7px; height: 6px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='52' height='6'%3E%3Cg%3E%3Crect x='1' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='14' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='27' y='.5' width='11' height='5' rx='2.5' fill='%23D0202C'/%3E%3Crect x='40' y='.5' width='11' height='5' rx='2.5' fill='%23F4F4F5'/%3E%3C/g%3E%3C/svg%3E") 0 0 / 52px 6px repeat-x; }
+.hero-top::before { content: ''; position: absolute; left: 0; right: 0; bottom: 9px; height: 2px; background: #2A2B2E; }
 .hero-top .display { font-size: 64px; letter-spacing: .01em; }
 .hero-top .lead { color: #C9CCD2; }
 
