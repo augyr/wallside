@@ -3,8 +3,8 @@
   "short_name": "Wallside",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#F5F2F2",
-  "theme_color": "#6E0A12",
+  "background_color": "#EDEEF0",
+  "theme_color": "#0D0D0E",
   "icons": [
     { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
